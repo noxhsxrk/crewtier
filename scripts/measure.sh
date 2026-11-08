@@ -92,8 +92,9 @@ totals_of() {  # kind file
   esac
 }
 
+NOT_GENERATED='$3 !~ /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|Gemfile\.lock|composer\.lock|go\.sum|flake\.lock|mix\.lock|Podfile\.lock|packages\.lock\.json)$/ && $3 !~ /\.min\.(js|css)$/'   # lockfiles and minified bundles don't count as lines written
 diff_lines() {  # lines added+removed vs HEAD (run before committing)
-  git diff HEAD --numstat 2>/dev/null | awk '{a+=$1; d+=$2} END {print a+d+0}'
+  git diff HEAD --numstat 2>/dev/null | awk "$NOT_GENERATED"' && $1 ~ /^[0-9]+$/ {a+=$1; d+=$2} END {print a+d+0}'
 }
 
 # meters still open, ignoring ones started more than 6 hours ago (left behind by a crash or an old version)
@@ -165,9 +166,9 @@ case "${1:-}" in
     if [[ -n "$since" ]] && git rev-parse --git-dir >/dev/null 2>&1; then
       # lines changed since then: commits made in the session plus what's still uncommitted
       total="$( { git log --since="@$since" --numstat --format= 2>/dev/null; git diff HEAD --numstat 2>/dev/null; } \
-               | awk '$1 ~ /^[0-9]+$/ && $3 !~ /^\.crewtier\// {n += $1 + $2} END {print n + 0}')"
+               | awk "$NOT_GENERATED"' && $1 ~ /^[0-9]+$/ && $3 !~ /^\.crewtier\// {n += $1 + $2} END {print n + 0}')"
       # plus new files not added to git yet
-      untracked="$(git ls-files --others --exclude-standard 2>/dev/null | grep -v '^\.crewtier/' | while IFS= read -r u; do [[ -f "$u" ]] && wc -l <"$u"; done | awk '{n += $1} END {print n + 0}')"
+      untracked="$(git ls-files --others --exclude-standard 2>/dev/null | grep -v '^\.crewtier/' | grep -vE '(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum)$' | while IFS= read -r u; do [[ -f "$u" ]] && wc -l <"$u"; done | awk '{n += $1} END {print n + 0}')"
       total=$((total + untracked))
       # lines the workers wrote: results crewtier run saved during this session
       for r in .crewtier/results/*.json; do

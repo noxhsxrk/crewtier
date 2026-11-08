@@ -294,9 +294,11 @@ if [[ $code -eq 0 && -n "$verify" ]]; then
   fi
 fi
 
+# lockfiles and minified bundles are written by tools, not the worker: leave them out of the line count
+NOT_GENERATED='$3 !~ /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|Gemfile\.lock|composer\.lock|go\.sum|flake\.lock|mix\.lock|Podfile\.lock|packages\.lock\.json)$/ && $3 !~ /\.min\.(js|css)$/'
 block="$(printf '%s\n' "$out" | awk '/<<<CREWTIER/{p=1;next} /CREWTIER>>>/{p=0} p' | tail -6)"
 files="$(cd "$work" && git add -A -N . 2>/dev/null; git diff HEAD --name-only -- . ':(exclude).crewtier' ':(exclude)node_modules' ':(exclude).venv' ':(exclude)venv' ':(exclude)vendor')"
-lines="$(cd "$work" && git diff HEAD --numstat -- . ':(exclude).crewtier' ':(exclude)node_modules' ':(exclude).venv' ':(exclude)venv' ':(exclude)vendor' 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {n += $1 + $2} END {print n + 0}')"
+lines="$(cd "$work" && git diff HEAD --numstat -- . ':(exclude).crewtier' ':(exclude)node_modules' ':(exclude).venv' ':(exclude)venv' ':(exclude)vendor' 2>/dev/null | awk "$NOT_GENERATED"' && $1 ~ /^[0-9]+$/ {n += $1 + $2} END {print n + 0}')"
 patch=""; [[ $isolated == 1 ]] && patch="$dir/patches/$task.patch"
 
 status="done"; rstatus="done"

@@ -177,7 +177,7 @@ rules_text() {  # $1 names (space separated)  $2 path to SKILL.md as the agent s
   cat <<EOF
 ## crewtier
 $who Do coding work yourself unless a task is big (about 300+ changed lines), already decided, and checkable by a command. For those, hand the typing to another coding agent in one call, and wait for it (long shell timeout, don't poll):
-\`${prefix}crewtier do <t1-easy|t2-normal|t3-hard> --spec <spec file> --commit "<message>"\` (or pipe the spec in). The spec ends with \`Done when: <command>\`. On PASS, report it and move on without reviewing the diff. Read \`$skill\` only to set up workers or when \`do\` fails.
+\`${prefix}crewtier do <t1-easy|t2-normal|t3-hard> --spec <spec file> --commit "<message>"\` (or pipe the spec in). The spec ends with \`Done when: <command>\`. On PASS, report it in a few sentences and move on: no diff review, no restating the spec. Don't check the install first; \`do\` reports what's missing. Read \`$skill\` only to set up workers or when \`do\` fails.
 EOF
 }
 

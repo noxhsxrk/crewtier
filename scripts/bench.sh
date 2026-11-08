@@ -75,6 +75,8 @@ lead_run() {  # $1 dir  $2 prompt  -> prints usage JSON {in,out,cw,cr}; raw outp
   fi
 }
 
+NOT_GENERATED='$3 !~ /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|Gemfile\.lock|composer\.lock|go\.sum|flake\.lock|mix\.lock|Podfile\.lock|packages\.lock\.json)$/ && $3 !~ /\.min\.(js|css)$/'
+
 one() {  # $1 mode self|crewtier
   local mode="$1" d="$bdir/$1" p t0 u secs tres="none" lines tasks cu
   git worktree add --detach -q "$d" HEAD || { echo "worktree failed"; return 1; }
@@ -86,12 +88,12 @@ Do this task yourself. Do not use crewtier and do not delegate to other agents. 
   else
     p="$taskp
 
-Use the crewtier skill for this (read its SKILL.md and follow it). Do not commit."
+Do not commit."   # same as everyday use: the lead decides from the crewtier rules in its rules file
   fi
   echo "… $mode run ($lead as lead)" >&2
   t0=$(date +%s); u="$(lead_run "$d" "$p")"; secs=$(( $(date +%s) - t0 ))
   if [[ -n "$test_cmd" ]]; then ( cd "$d" && bash -c "$test_cmd" ) >"$d.test.out" 2>&1 && tres=PASS || tres=FAIL; fi
-  lines="$(cd "$d" && git add -A -N . 2>/dev/null; git diff HEAD --numstat -- . ':(exclude).crewtier' ':(exclude)node_modules' | awk '{a+=$1+$2} END{print a+0}')"
+  lines="$(cd "$d" && git add -A -N . 2>/dev/null; git diff HEAD --numstat -- . ':(exclude).crewtier' ':(exclude)node_modules' | awk "$NOT_GENERATED"' && $1 ~ /^[0-9]+$/ {a+=$1+$2} END{print a+0}')"   # code lines: lockfiles left out
   tasks="$(ls "$d"/.crewtier/results/*.json 2>/dev/null | wc -l | tr -d ' ')"   # one result per delegated task
   cu="$(jq -r '(.in + 5*.out + 1.25*.cw + 0.1*.cr) | floor' <<<"$u")"
   turns="$(jq -r '.turns // "-"' <<<"$u")"

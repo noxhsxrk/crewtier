@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the README demo GIFs (terminal recordings, scripted).
 
-    python3 assets/demo/render.py          # writes assets/demo/setup.gif and assets/demo/task.gif
+    python3 assets/demo/render.py          # writes setup.gif, task.gif and menu.gif (charts: charts.py)
 
 Needs Pillow. The sessions below are scripted to show the flow; model names and timings are
 illustrative, not a recording of a real run.
@@ -196,36 +196,22 @@ def setup_demo():
 
 def task_demo():
     t = Term("~/shop-api — your lead agent")
-    t.type("{cyan}you ›{/} ", "Add pagination and filtering to GET /orders, with tests", after=600)
-    t.out("", "{lime}lead ·{/} checking the crew", ms=400)
-    t.out("{dim}$ crewtier health{/}", ms=500)
-    t.out("{dim}WORKER     STATUS           DETAIL{/}",
-          "agy        {lime}ready{/}            ping ok (flash)",
-          "codex      {lime}ready{/}            ping ok (mini)",
-          "opencode   {red}quota-exhausted{/}  usage limit reached", "", ms=160)
-    t.out("{lime}lead ·{/} plan → .crewtier/plan.md", ms=500)
-    t.out("  T1  parse & validate query params     {lime}t1-easy{/}",
-          "  T2  paged + filtered repository query {amber}t2-normal{/}",
-          "  T3  signed cursor tokens (security)   {cyan}lead — doing it myself{/}", "", ms=260)
-    t.out("{dim}$ crewtier run T1 t1-easy{/}", ms=1200)
-    t.out("{b}crewtier T1 [t1-easy] agy/flash — {lime}done{/}{b} — 1m42s{/}",
-          "{dim}route: skipped opencode (quota exhausted){/}",
-          "diff:  src/orders/params.ts      | 38 {lime}++++++{/}",
-          "       src/orders/params.test.ts | 41 {lime}++++++{/}",
-          "verify: pnpm test params → {lime}PASS{/}", "", ms=150)
-    t.out("{dim}$ crewtier run T2 t2-normal{/}", ms=1400)
-    t.out("{b}crewtier T2 [t2-normal] codex/mini — {red}verify failed{/}{b} — 3m10s{/}",
-          "verify: pnpm test orders.repo → {red}FAIL (exit 1){/}",
-          "  {dim}|{/} expected 20 items, received 21 (off-by-one on limit)",
-          "  {dim}→ send it back: crewtier run T2 t2-normal --fix{/}", "", ms=150)
-    t.out("{dim}$ crewtier run T2 t2-normal --fix{/}", ms=1100)
-    t.out("{b}crewtier T2 [t2-normal] codex/mini — {lime}done{/}{b} — 0m48s{/}",
-          "verify: pnpm test orders.repo → {lime}PASS{/}", "", ms=150)
-    t.out("{lime}lead ·{/} T3 myself (security-sensitive) … {lime}done{/}, tests pass", ms=900)
-    t.out("", "{lime}lead ·{/} {b}3 tasks done, all tests green.{/}",
-          "        T1 agy · T2 codex (1 fix) · T3 me",
-          "        lead tokens: {lime}{b}31%{/} of doing it all myself", ms=300)
-    t.pause(3200)
+    t.type("{cyan}you ›{/} ", "Rename getUser to fetchUser everywhere", after=500)
+    t.out("", "{lime}lead ·{/} small change (~20 lines) → doing it myself", ms=700)
+    t.out("{dim}  edited 4 files · pnpm test → {/}{lime}PASS{/}", "", ms=900)
+    t.type("{cyan}you ›{/} ", "Add CSV and PDF export to the reports page, with tests", after=600)
+    t.out("", "{lime}lead ·{/} big (~400 lines), decided, checkable → one call", ms=700)
+    t.out("{dim}$ crewtier do t2-normal --spec .crewtier/specs/export.md --commit \"Add report export\"{/}", ms=1300)
+    t.out("{dim}… D1 codex/gpt-6.1-sol still running (3m){/}", ms=1300)
+    t.out("{b}D1 {lime}PASS{/}{b} codex/gpt-6.1-sol · 412 lines (5 files) · 4m02s · commit 4e1c2ab{/}", "", ms=900)
+    t.out("{lime}lead ·{/} {b}Done.{/} Export is in, tests pass, committed as 4e1c2ab.",
+          "        I didn't review the diff: the check passed.", "", ms=400)
+    t.out("{dim}$ crewtier session{/}", ms=900)
+    t.out("claude session (whole conversation so far)",
+          "  cost units: 61204",
+          "  lines changed this session: {b}436{/}  (workers: {lime}412{/} in 1 task(s) · lead: 24)",
+          "  lead cost per line shipped: {lime}{b}140 units{/}", ms=200)
+    t.pause(3400)
     t.save("task.gif")
 
 
