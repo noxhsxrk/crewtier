@@ -283,7 +283,7 @@ Every file `init` creates or edits is recorded in `~/.crewtier/installed.tsv`, a
 | &nbsp;&nbsp;`--isolated` · `--auto-escalate` | run in a worktree, leave a patch · fix once, then climb tiers |
 | `crewtier run-many T1:tier T2:tier … [-- opts]` | independent tasks in parallel worktrees |
 | `crewtier apply <task>` · `discard <task>` | apply / drop an isolated run's patch |
-| `crewtier meter start\|end …` | lead token cost per task |
+| `crewtier meter start\|end [task tier worker outcome]` | lead tokens for a task, or for a whole session when run with no arguments |
 | `crewtier report` · `models [--check]` · `session` | savings · track record and cost per passed task · lead session totals |
 | `crewtier bench --lead claude\|codex --task "…" [--test "cmd"] [--keep]` | A/B benchmark |
 

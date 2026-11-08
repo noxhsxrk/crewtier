@@ -94,13 +94,13 @@ header='date\tlead\trepo\ttask\ttier\tworker\toutcome\tdiff_lines\tin\tout\tcach
 
 case "${1:-}" in
   start)
-    t="${2:?task id}"; mkdir -p "$meter"
+    t="${2:-session}"; mkdir -p "$meter"   # no id = one meter for the whole session
     totals >"$meter/$t.start"
-    echo "meter started for $t (lead: $lead)" ;;
+    echo "meter started${2:+ for $t} (lead: $lead). Work as usual, then: crewtier meter end${2:+ $t}" ;;
 
   end)
-    t="${2:?task id}"; tier="${3:?tier}"; who="${4:?worker/model, or self}"; outcome="${5:?pass|fail|escalated}"
-    [[ -f "$meter/$t.start" ]] || { echo "no start snapshot for $t"; exit 2; }
+    t="${2:-session}"; tier="${3:--}"; who="${4:-session}"; outcome="${5:-pass}"
+    [[ -f "$meter/$t.start" ]] || { echo "no meter running${2:+ for $t}: start one with  crewtier meter start${2:+ $t}"; exit 2; }
     now="$(totals)"; before="$(cat "$meter/$t.start")"
     d=$(jq -nr --argjson a "$before" --argjson b "$now" \
       '[($b.in-$a.in),($b.out-$a.out),($b.cw-$a.cw),($b.cr-$a.cr)] | @tsv')
