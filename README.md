@@ -31,17 +31,17 @@
 
 ---
 
-**crewtier** is a skill plus a small CLI for AI coding agents. Whichever agent you talk to (Claude Code, Codex, opencode, Gemini, Antigravity, Copilot, Cursor, and more) becomes the **lead**. It splits your request into small tasks, gives each a difficulty tier, and hands them to the *other* agent CLIs on your machine. You keep using the agent and UI you like.
+**crewtier** is a skill plus a small CLI that cuts what your main coding agent costs. Whichever agent you talk to (Claude Code, Codex, opencode, Gemini, Antigravity, Copilot, Cursor, and more) becomes the **lead**. It splits your request into small tasks, gives each a difficulty tier, and hands them to the *other* agent CLIs on your machine. You keep using the agent and UI you like.
 
 ## Features
 
+- **Built to cut the lead's cost.** Workers do the typing, and the lead keeps its own context small (narrow reads, no big logs, exploration sent to workers), because in long sessions re-reading the conversation costs more than writing code. `crewtier session` shows where the cost went.
 - **Any agent can lead.** 18 leads supported. Every other installed agent CLI is a worker. crewtier knows about 45 agent CLIs, and `crewtier agents add` wires up any other one.
 - **Tiered routing.** Easy tasks go to a fast, cheap model; hard ones to a strong model; risky ones stay with the lead.
 - **Live model lists.** Model names come straight from each CLI (`codex debug models`, `agy models`, `opencode models`), so the lead never guesses a name.
 - **Sign-in and quota checks.** Every session starts by checking who is signed in and who still has quota. `crewtier login` fixes the rest.
 - **Verified results.** Each task has a check command. A worker's "done" has to show up in git and pass the test.
 - **Clean fallback.** If a worker runs dry or fails, crewtier saves its partial patch, resets, and tries the next one.
-- **Lean lead.** The skill keeps the lead's own context small (narrow reads, big output kept out, exploration sent to workers) and `crewtier session` says when a conversation has grown long enough that a fresh one would be much cheaper.
 - **Proof, not promises.** `crewtier report` and `crewtier bench` show whether delegating saved the lead anything.
 
 ## Quick start

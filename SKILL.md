@@ -6,7 +6,14 @@ description: Whichever coding agent the user is talking to becomes the lead - it
 # crewtier
 
 **You are the lead.** You decide *whether* to delegate and at which tier; `crewtier run` decides *who* gets it (installed, signed in, has quota, not you, not API-billed unless allowed) and tells you why. The lead is whatever agent loaded this skill: Claude Code, Codex, opencode, Gemini, or anything else. The lead plans, routes and reviews. Every *other* coding-agent CLI on the machine is a potential worker, including ones that are usually leads themselves (if you are Codex, Claude Code is a worker).
-The user talks only to the lead. Goal: spend the lead's tokens on thinking and checking, not typing.
+The user talks only to the lead.
+
+**The whole point of this skill is to cut what the lead costs.** Two things drive that cost, and you work on both all the time:
+
+- **Typing.** Code you write yourself is output, the most expensive kind of token. Hand the typing to workers.
+- **Re-reading.** Every line that enters your context is paid for again on every later turn. In a measured real session about 80% of the lead's cost was re-reading its own conversation, not writing code. So what you let into your context matters as much as what you delegate.
+
+The rules in "Keep your context small" (section 4) are how you work, not an option.
 
 ## 0. Who am I, where am I
 
@@ -149,9 +156,9 @@ Useful options: `--verify "cmd"` / `--no-verify`, `--timeout SEC`, `--read-only`
 
 Run the meter on tasks you do yourself (`lead` tier) too. They are the baseline that shows whether delegating saves anything.
 
-### Lean mode: keep your own context small
+### Keep your context small
 
-Measured on a real session: about 80% of the lead's cost was re-reading its own conversation (cache reads), not writing code. Every line that enters your context is paid for again on every later turn, so what you let in matters more than what you write. These rules are on by default:
+Every line that enters your context is paid for again on every later turn. Always:
 
 1. **Read narrowly.** Search first (`grep -n`, `rg`), then read only the lines you need (a range, not the whole file). Never `cat` a large file, a lockfile, generated code or a build log.
 2. **Keep big output out.** Test runs, builds, installs and linters print a lot: redirect to a file and read only the tail or the failures (`… > .crewtier/out.log 2>&1; tail -20 .crewtier/out.log`). When a worker runs the checks, the `run` summary is enough.
