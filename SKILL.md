@@ -36,7 +36,7 @@ EOF
 ```
 
 - `<lead>` is your CLI's binary name (`claude`, `codex`, `gemini`, …); Claude Code is detected automatically.
-- Tiers: `t1-easy` (boilerplate, tests, docs), `t2-normal` (a feature across a few files), `t3-hard` (tricky logic, cross-module refactors).
+- Pick the tier by **difficulty**, not size (size only decides whether to delegate at all): `t1-easy` for big but mechanical work (many tests, boilerplate, docs, repetitive changes across files), `t2-normal` for a feature with a clear spec, `t3-hard` for tricky logic or cross-module refactors. A cheaper tier saves the worker's quota, and if it fails `do` moves up a tier on its own.
 - `do` saves the spec, runs the first ready worker in the tier, checks it, gives a failing worker one fix round, moves up a tier if it still fails, meters your tokens, and commits on success (only if the tree was clean).
 - Success is one line: `D1 PASS codex/gpt-6.1-sol · 412 lines (5 files) · 3m10s · commit abc123`. Report it to the user in a sentence and move on.
 - `VERIFY-ERROR` means the check command itself didn't run (typo, missing tool). The worker's changes are in the tree: fix the command and run it once. Don't review the code.
