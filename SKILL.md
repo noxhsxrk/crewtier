@@ -149,9 +149,16 @@ Useful options: `--verify "cmd"` / `--no-verify`, `--timeout SEC`, `--read-only`
 
 Run the meter on tasks you do yourself (`lead` tier) too. They are the baseline that shows whether delegating saves anything.
 
-### Long conversations
+### Lean mode: keep your own context small
 
-In a long session most of your cost is re-reading the conversation (cache reads), not writing code. When a feature is done and committed and the conversation is long, suggest to the user to start a fresh session for the next feature: the routing file, results and measurements all carry over.
+Measured on a real session: about 80% of the lead's cost was re-reading its own conversation (cache reads), not writing code. Every line that enters your context is paid for again on every later turn, so what you let in matters more than what you write. These rules are on by default:
+
+1. **Read narrowly.** Search first (`grep -n`, `rg`), then read only the lines you need (a range, not the whole file). Never `cat` a large file, a lockfile, generated code or a build log.
+2. **Keep big output out.** Test runs, builds, installs and linters print a lot: redirect to a file and read only the tail or the failures (`… > .crewtier/out.log 2>&1; tail -20 .crewtier/out.log`). When a worker runs the checks, the `run` summary is enough.
+3. **Explore through workers.** "Where is X handled?", "list every caller of Y", "explain module Z in 10 lines": send these as `--read-only` tasks to a `t1-easy` worker and use its short answer, instead of opening files yourself. Use your agent's own subagents for this if it has them.
+4. **Plan in one pass, run in batches.** Write the whole plan once, then start independent tasks together with `run-many` instead of one task per turn. Fewer turns means fewer re-reads.
+5. **Delegate the typing.** Aim for workers to write most of the lines. You plan, write briefs, review summaries, and keep only what the delegation gate says to keep.
+6. **Watch the length.** After a feature is committed, run `crewtier session`. When it says the conversation is long, tell the user once: "this conversation is long; starting a fresh session for the next feature will cost much less (routing, results and measurements carry over)". Don't repeat it every turn.
 
 ### Parallel (independent tasks only)
 

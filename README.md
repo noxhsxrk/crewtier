@@ -41,6 +41,7 @@
 - **Sign-in and quota checks.** Every session starts by checking who is signed in and who still has quota. `crewtier login` fixes the rest.
 - **Verified results.** Each task has a check command. A worker's "done" has to show up in git and pass the test.
 - **Clean fallback.** If a worker runs dry or fails, crewtier saves its partial patch, resets, and tries the next one.
+- **Lean lead.** The skill keeps the lead's own context small (narrow reads, big output kept out, exploration sent to workers) and `crewtier session` says when a conversation has grown long enough that a fresh one would be much cheaper.
 - **Proof, not promises.** `crewtier report` and `crewtier bench` show whether delegating saved the lead anything.
 
 ## Quick start

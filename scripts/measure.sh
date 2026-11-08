@@ -176,6 +176,7 @@ case "${1:-}" in
         "  cost units: \($u | floor)   (in x1, out x5, cache write x1.25, cache read x0.1)",
         "  lines changed this session: \($total)  (workers: \($wl) in \($wn) task(s) · lead: \($ll))",
         (if $nl > 0 then "  note: \($nl) worker task(s) ran on crewtier < 0.1.7 and have no line count, so their lines are counted as the lead\u0027s" else empty end),
+        (if ($u > 0) and ((0.1*.cr) / $u > 0.6) and ($u > 2000000) then "  ! long conversation: \(((0.1*.cr) / $u * 100) | floor)% of the cost is re-reading it. Start a fresh session for the next feature (routing, results and measurements carry over)." else empty end),
         (if $total > 0 then "  lead cost per line shipped: \(($u / $total) | floor) units   (compare with a session where you don\u0027t delegate)" else "  lead cost per line shipped: no code changes found yet" end)' <<<"$t" ;;
 
   report)
