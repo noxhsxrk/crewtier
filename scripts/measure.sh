@@ -21,6 +21,10 @@ command -v jq >/dev/null || { echo "jq required"; exit 2; }
 
 lead="${CREWTIER_LEAD:-}"
 [[ -z "$lead" && "${CLAUDECODE:-}" == "1" ]] && lead=claude
+if [[ -z "$lead" ]]; then   # run from a plain terminal: use the lead whose routing file exists, if only one does
+  rf="$(ls "$HOME"/.crewtier/routing.*.json 2>/dev/null)"
+  [[ $(printf '%s\n' "$rf" | sed '/^$/d' | wc -l) -eq 1 ]] && { lead="$(basename "$rf" .json)"; lead="${lead#routing.}"; }
+fi
 lead="${lead:-unknown}"
 
 state="$HOME/.crewtier"; mkdir -p "$state"
