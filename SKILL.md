@@ -15,12 +15,12 @@ Your cost has two parts: **output** (code you type, the priciest tokens) and **r
 2. **One turn per delegated task.** Use `crewtier do` (below). Don't call `health`, `meter`, `run` or `apply` separately, and don't write a plan file for a single task.
 3. **Don't read code to write the spec.** If the user or a task file already describes the work, pass it as is. The worker explores the code at its own cost. Read code yourself only for a real design decision.
 4. **Don't review a pass.** When `do` prints `PASS`, take it: no `git diff`, no opening the files. Look only when it fails.
-5. **Keep your context small.** Search, then read only the lines you need. Never `cat` big files, lockfiles, or logs; redirect long command output to a file and read its tail. Send "where is X / list every caller of Y" questions to a worker with `crewtier run <id> t1-easy --read-only --spec -`.
+5. **Keep your context small.** Search, then read only the lines you need. Never `cat` big files, lockfiles, or logs; redirect long command output to a file and read its tail. Screenshots and other images are the heaviest thing you can add: take one only when you must see something, not to confirm every small change. Send "where is X / list every caller of Y" questions to a worker with `crewtier run <id> t1-easy --read-only --spec -`.
 6. **Start fresh per feature.** After a feature is committed in a long conversation, tell the user once that a new session for the next feature costs much less. Everything crewtier keeps carries over.
 
 ## Delegating a task
 
-Call it once and wait for it to finish. It can take several minutes, so give the shell call a long timeout (in Claude Code, `timeout: 600000`), and don't poll it in the background:
+Call it once and wait for it to finish. It can take several minutes, so give the shell call a long timeout (in Claude Code, `timeout: 600000`). Don't run it in the background and check on it: each check is another full re-read of your context. Budget: reading this skill once plus one `do` call per task. A benchmark lead doing the same tasks itself needed 3 to 11 turns, so every extra turn you spend on delegation eats the saving.
 
 ```bash
 CREWTIER_LEAD=<lead> crewtier do t2-normal --commit "Add crumbling platforms" <<'EOF'

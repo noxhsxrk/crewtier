@@ -96,12 +96,23 @@ diff_lines() {  # lines added+removed vs HEAD (run before committing)
   git diff HEAD --numstat 2>/dev/null | awk '{a+=$1; d+=$2} END {print a+d+0}'
 }
 
+# meters still open, ignoring ones started more than 6 hours ago (left behind by a crash or an old version)
+open_meters() {
+  local f now mt; now="$(date +%s)"
+  for f in "$meter"/*.start; do
+    [[ -f "$f" ]] || continue
+    mt="$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now")"
+    (( now - mt > 21600 )) && { rm -f "$f" "${f%.start}.overlap"; continue; }
+    basename "$f" .start
+  done
+}
+
 header='date\tlead\trepo\ttask\ttier\tworker\toutcome\tdiff_lines\tin\tout\tcache_write\tcache_read\tflag\n'
 
 case "${1:-}" in
   start)
     t="${2:-session}"; mkdir -p "$meter"   # no id = one meter for the whole session
-    open_now="$(ls "$meter"/*.start 2>/dev/null | sed 's#.*/##; s#\.start$##' | grep -vxF "$t" | tr '\n' ' ')"
+    open_now="$(open_meters | grep -vxF "$t" | tr '\n' ' ')"
     if [[ -n "$open_now" && "$t" != session ]]; then
       echo "warning: meter already running for: ${open_now}— the windows overlap, so this task will be flagged and left out of report averages. End those first." >&2
       echo "$open_now" >"$meter/$t.overlap"
@@ -119,7 +130,7 @@ case "${1:-}" in
     fi
     tier="${tier:--}"; who="${who:-session}"; outcome="${outcome:-pass}"
     # another task's meter started while this one ran? then the numbers mix two jobs
-    others="$(ls "$meter"/*.start 2>/dev/null | sed 's#.*/##; s#\.start$##' | grep -vxF "$t" | grep -vxF session | tr '\n' ' ')"
+    others="$(open_meters | grep -vxF "$t" | grep -vxF session | tr '\n' ' ')"
     flag=""; { [[ -f "$meter/$t.overlap" ]] || [[ -n "$others" && "$t" != session ]]; } && flag="overlap"
     rm -f "$meter/$t.overlap"
     [[ -f "$meter/$t.start" ]] || { echo "no meter running${2:+ for $t}: start one with  crewtier meter start${2:+ $t}"; exit 2; }
@@ -134,6 +145,10 @@ case "${1:-}" in
     rm -f "$meter/$t.start"
     read -r i o cw cr <<<"$d"
     echo "$t: lead in=$i out=$o cache_write=$cw cache_read=$cr (diff $lines lines, $tier, $who, $outcome${flag:+, OVERLAP: left out of averages})" ;;
+
+  clear)   # forget every open meter in this repo
+    n="$(ls "$meter"/*.start 2>/dev/null | wc -l | tr -d ' ')"; rm -f "$meter"/*.start "$meter"/*.overlap 2>/dev/null
+    echo "cleared $n open meter(s)" ;;
 
   session)   # the lead's whole current session, read from its own transcript: no meter needed
     f="$(transcript)"
