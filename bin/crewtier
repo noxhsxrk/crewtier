@@ -117,6 +117,10 @@ root_is_ephemeral() {
 
 install_app() {  # copy this package to $APP and link the launcher; prints the launcher path
   mkdir -p "$STATE" "$BINDIR"
+  if [[ -d "$ROOT/.git" ]]; then  # usually npx run inside the crewtier repo, which uses the checkout, not npm
+    printf '  %s!%s installing from the git checkout at %s (version %s), not from npm.\n' "$c_warn" "$c_off" "${ROOT/#$H/~}" "$VERSION" >&2
+    printf '    %sfor the published release, run it from another folder:  cd ~ && npx @noxhsxrk/crewtier@latest self-install%s\n' "$c_dim" "$c_off" >&2
+  fi
   local tmp="$APP.new.$$"
   rm -rf "$tmp"; mkdir -p "$tmp"
   cp -R "$ROOT/." "$tmp/"; rm -rf "$tmp/.git" "$tmp/node_modules"
@@ -481,10 +485,11 @@ cmd_update() {
   elif command -v npx >/dev/null; then runner=(npx -y --prefer-online "$pkg@$want")
   elif command -v bunx >/dev/null; then runner=(bunx "$pkg@$want")
   else say "Needs pnpm, npm or bun. Or: curl -fsSL https://raw.githubusercontent.com/noxhsxrk/crewtier/main/install.sh | bash"; exit 1; fi
-  "${runner[@]}" self-install >/dev/null 2>&1 || { warn "update failed: run  ${runner[*]} init"; exit 1; }
+  # run from $HOME: inside the crewtier repo itself, npx would pick the local checkout instead of the registry
+  (cd "$HOME" && "${runner[@]}" self-install >/dev/null 2>&1) || { warn "update failed: run  cd ~ && ${runner[*]} init"; exit 1; }
   local now; now="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$APP/package.json" 2>/dev/null | head -1)"
   if [[ -n "$latest" && "$now" != "$latest" ]]; then
-    warn "still on $now: a cached copy got in the way. Try:  npx -y --prefer-online $pkg@$latest self-install"
+    warn "still on $now: a cached copy got in the way. Try:  cd ~ && npx -y --prefer-online $pkg@$latest self-install"
     exit 1
   fi
   ok "updated to $now"
