@@ -71,6 +71,7 @@ ${c_bold}Install${c_off}
       --dry-run                    show what would change
       --skip-login                 don't run the sign-in check first
   crewtier login [agent…]      sign-in check: list agents, sign in to more, repeat until you're done
+  crewtier update               update crewtier to the latest release
   crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
   crewtier routing [add|remove|first|edit]   show or change which worker/model each tier uses
   crewtier agents add <bin>    use another agent CLI as a worker
@@ -467,6 +468,27 @@ cmd_setup() {
   say "${c_dim}Run  crewtier setup  any time to change these.${c_off}"
 }
 
+# --- update: fetch the latest release and reinstall the app ---------------------------------
+cmd_update() {
+  local pkg="@noxhsxrk/crewtier" latest runner=()
+  latest="$(npm view "$pkg" version --prefer-online 2>/dev/null)"
+  [[ -n "$latest" ]] || { warn "couldn't reach npm to check the latest version"; }
+  if [[ -n "$latest" && "$latest" == "$VERSION" ]]; then ok "already on the latest version ($VERSION)"; return 0; fi
+  say "Updating crewtier ${VERSION} → ${latest:-latest}"
+  if command -v pnpm >/dev/null; then runner=(pnpm dlx "$pkg@latest")
+  elif command -v npx >/dev/null; then runner=(npx -y --prefer-online "$pkg@latest")
+  elif command -v bunx >/dev/null; then runner=(bunx "$pkg@latest")
+  else say "Needs pnpm, npm or bun. Or: curl -fsSL https://raw.githubusercontent.com/noxhsxrk/crewtier/main/install.sh | bash"; exit 1; fi
+  "${runner[@]}" self-install >/dev/null || { warn "update failed: run  ${runner[*]} init"; exit 1; }
+  ok "updated to $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$APP/package.json" 2>/dev/null | head -1)"
+  # skills installed per repo (project scope) are copies: they don't follow the app
+  local repos; repos="$(awk -F'|' '$1=="project"{print $2}' "$MANIFEST" 2>/dev/null | sort -u)"
+  if [[ -n "$repos" ]]; then
+    say "  ${c_dim}repos with their own copy of the skill (update each with  crewtier init --scope project  inside it):${c_off}"
+    printf '%s\n' "$repos" | sed 's/^/    /'
+  fi
+}
+
 # --- turn workers on / off ---------------------------------------------------------
 # ~/.crewtier/disabled lists backends that must never be used as workers. health.sh doesn't check
 # them, worker.sh skips them, and `crewtier agents` shows them as "off".
@@ -857,6 +879,7 @@ case "${1:-help}" in
                if root_is_ephemeral; then install_app; exec "$APP/bin/crewtier" init "$@"; fi
                cmd_init "$@" ;;
   self-install) install_app ;;
+  update|upgrade) cmd_update ;;
   leads)       shift; cmd_leads "$@" ;;
   prompt)      shift; rules_text "${1:?usage: crewtier prompt <lead>}" "$ROOT/SKILL.md" ;;
   status)      cmd_status ;;

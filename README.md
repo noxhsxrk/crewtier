@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/noxhsxrk/crewtier/main/install.sh |
 ```
 
 > [!TIP]
-> Keep `@latest`. Without it, npx can reuse an older copy from its cache. To update later, run the same command again.
+> Keep `@latest`. Without it, npx can reuse an older copy from its cache. To update later, run `crewtier update`.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/noxhsxrk/crewtier/main/assets/demo/setup.gif" alt="crewtier init shows a checklist of agent CLIs: sign in to codex with s, turn agy off with space, then pick which leads get the skill." width="760">
@@ -155,6 +155,7 @@ You mostly use these. The lead calls the rest for you.
 |---|---|
 | `crewtier init` | check sign-ins, then install the skill for the leads you choose |
 | `crewtier setup` (or just `crewtier`) | menu to sign in, turn workers on or off, add newly installed agents, and pick the models for each tier |
+| `crewtier update` | update to the latest release |
 | `crewtier login [agent]` | sign in to an agent CLI and re-check it |
 | `crewtier routing [add\|remove\|first\|edit]` | see or change which agent and model each tier uses |
 | `crewtier agents add <bin>` | use another agent CLI as a worker |
