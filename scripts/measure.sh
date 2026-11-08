@@ -103,7 +103,7 @@ case "${1:-}" in
     t="${2:-session}"; mkdir -p "$meter"   # no id = one meter for the whole session
     open_now="$(ls "$meter"/*.start 2>/dev/null | sed 's#.*/##; s#\.start$##' | grep -vxF "$t" | tr '\n' ' ')"
     if [[ -n "$open_now" && "$t" != session ]]; then
-      echo "warning: meter already running for: $open_now— the windows overlap, so this task will be flagged and left out of report averages. End those first." >&2
+      echo "warning: meter already running for: ${open_now}— the windows overlap, so this task will be flagged and left out of report averages. End those first." >&2
       echo "$open_now" >"$meter/$t.overlap"
     else rm -f "$meter/$t.overlap"; fi
     totals >"$meter/$t.start"
