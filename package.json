@@ -1,6 +1,6 @@
 {
   "name": "@noxhsxrk/crewtier",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Think like a lead. Ship like a crew. Your coding agent plans and reviews; the other coding-agent CLIs on your machine write the code.",
   "keywords": [
     "claude-code",
