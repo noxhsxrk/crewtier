@@ -188,7 +188,7 @@ When a worker stops on a sign-in, quota or rate-limit error, `run` saves what it
 
 ## 7. Finish
 
-Report to the user in 2–5 lines: what was built, which tests ran, which worker and model did what, anything escalated or done by the lead, and the lead tokens per task from the `meter end` lines. If a tier kept escalating, offer to adjust the routing file. Delete `.crewtier/` unless the user wants to keep it, and never commit it. Measurements live in `~/.crewtier/results.tsv`, so deleting `.crewtier/` loses nothing.
+Report to the user in 2–5 lines: what was built, which tests ran, which worker and model did what, anything escalated or done by the lead, and the lead tokens per task from the `meter end` lines. When the user asks how much the session cost, run `crewtier session` (it reads your whole transcript, no meter needed). If a tier kept escalating, offer to adjust the routing file. Delete `.crewtier/` unless the user wants to keep it, and never commit it. Measurements live in `~/.crewtier/results.tsv`, so deleting `.crewtier/` loses nothing.
 
 ## Is it actually saving tokens?
 

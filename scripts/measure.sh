@@ -35,7 +35,9 @@ ZERO='{"in":0,"out":0,"cw":0,"cr":0}'
 transcript() {
   if [[ -n "${CREWTIER_TRANSCRIPT:-}" ]]; then echo "$CREWTIER_TRANSCRIPT"; return; fi
   case "$lead" in
-    claude) ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -1 ;;
+    claude) # this folder's project first (Claude Code names it after the path, / and . become -)
+            local d="$HOME/.claude/projects/$(pwd | sed 's#[/.]#-#g')"
+            { ls -t "$d"/*.jsonl 2>/dev/null; ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null; } | head -1 ;;
     codex)  find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' -type f 2>/dev/null \
               | while read -r f; do printf '%s\t%s\n' "$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")" "$f"; done \
               | sort -rn | head -1 | cut -f2 ;;
@@ -115,8 +117,21 @@ case "${1:-}" in
     read -r i o cw cr <<<"$d"
     echo "$t: lead in=$i out=$o cache_write=$cw cache_read=$cr (diff $lines lines)" ;;
 
-  session)
-    totals | jq -r --arg l "$lead" '"\($l) session: in=\(.in) out=\(.out) cache_write=\(.cw) cache_read=\(.cr)"' ;;
+  session)   # the lead's whole current session, read from its own transcript: no meter needed
+    f="$(transcript)"
+    if [[ -z "$f" || ! -f "$f" ]]; then
+      echo "No $lead session found for this folder. Run this inside the project folder where your lead is open."
+      [[ "$lead" == unknown ]] && echo "(lead unknown: set it with  CREWTIER_LEAD=claude crewtier session)"
+      exit 0
+    fi
+    t="$(totals_of "$lead" "$f")"
+    repo="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+    delegated="$(awk -F'\t' -v d="$(date +%F)" -v r="$repo" -v L="$lead" 'NR>1 && $1==d && $3==r && $2==L && $6!="self"' "$results" 2>/dev/null | wc -l | tr -d ' ')"
+    jq -r --arg l "$lead" --arg n "$delegated" '
+      "\($l) session (whole conversation so far)",
+      "  tokens: in=\(.in) out=\(.out) cache_write=\(.cw) cache_read=\(.cr)",
+      "  cost units: \((.in + 5*.out + 1.25*.cw + 0.1*.cr) | floor)   (in x1, out x5, cache write x1.25, cache read x0.1)",
+      "  tasks delegated in this repo today: \($n)   (details: crewtier report)"' <<<"$t" ;;
 
   report)
     [[ -f "$results" ]] || { echo "no results yet"; exit 0; }
