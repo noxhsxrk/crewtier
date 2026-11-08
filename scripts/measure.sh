@@ -146,7 +146,7 @@ case "${1:-}" in
     # when the conversation started: first timestamp in the transcript
     ts="$(jq -r 'select(.timestamp != null) | .timestamp' "$f" 2>/dev/null | head -1)"
     since="$(jq -nr --arg t "$ts" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601' 2>/dev/null)"
-    total=0; wl=0; wn=0
+    total=0; wl=0; wn=0; nl=0
     if [[ -n "$since" ]] && git rev-parse --git-dir >/dev/null 2>&1; then
       # lines changed since then: commits made in the session plus what's still uncommitted
       total="$( { git log --since="@$since" --numstat --format= 2>/dev/null; git diff HEAD --numstat 2>/dev/null; } \
@@ -158,18 +158,24 @@ case "${1:-}" in
       for r in .crewtier/results/*.json; do
         [[ -f "$r" ]] || continue
         mt="$(stat -c %Y "$r" 2>/dev/null || stat -f %m "$r" 2>/dev/null)"; [[ -n "$mt" && "$mt" -ge "$since" ]] || continue
-        read -r st ln <<<"$(jq -r '"\(.status) \(.linesChanged // 0)"' "$r")"
+        read -r st ln pf <<<"$(jq -r '"\(.status) \(.linesChanged // "-") \(.patch // "-")"' "$r")"
         [[ "$st" == done ]] || continue
+        if [[ "$ln" == "-" ]]; then   # result written before crewtier recorded line counts (< 0.1.7)
+          if [[ "$pf" != "-" && -f "$pf" ]]; then
+            ln="$(grep -E '^[+-]' "$pf" | grep -vE '^(\+\+\+|---) ' | wc -l | tr -d ' ')"
+          else nl=$((nl + 1)); continue; fi
+        fi
         wl=$((wl + ln)); wn=$((wn + 1))
       done
     fi
-    jq -r --arg l "$lead" --argjson total "${total:-0}" --argjson wl "$wl" --argjson wn "$wn" '
+    jq -r --arg l "$lead" --argjson total "${total:-0}" --argjson wl "$wl" --argjson wn "$wn" --argjson nl "$nl" '
       (.in + 5*.out + 1.25*.cw + 0.1*.cr) as $u
       | ([$total - $wl, 0] | max) as $ll
       | "\($l) session (whole conversation so far)",
         "  tokens: in=\(.in) out=\(.out) cache_write=\(.cw) cache_read=\(.cr)",
         "  cost units: \($u | floor)   (in x1, out x5, cache write x1.25, cache read x0.1)",
         "  lines changed this session: \($total)  (workers: \($wl) in \($wn) task(s) · lead: \($ll))",
+        (if $nl > 0 then "  note: \($nl) worker task(s) ran on crewtier < 0.1.7 and have no line count, so their lines are counted as the lead\u0027s" else empty end),
         (if $total > 0 then "  lead cost per line shipped: \(($u / $total) | floor) units   (compare with a session where you don\u0027t delegate)" else "  lead cost per line shipped: no code changes found yet" end)' <<<"$t" ;;
 
   report)

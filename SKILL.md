@@ -149,6 +149,10 @@ Useful options: `--verify "cmd"` / `--no-verify`, `--timeout SEC`, `--read-only`
 
 Run the meter on tasks you do yourself (`lead` tier) too. They are the baseline that shows whether delegating saves anything.
 
+### Long conversations
+
+In a long session most of your cost is re-reading the conversation (cache reads), not writing code. When a feature is done and committed and the conversation is long, suggest to the user to start a fresh session for the next feature: the routing file, results and measurements all carry over.
+
 ### Parallel (independent tasks only)
 
 When two or more tasks touch different files and don't depend on each other:
