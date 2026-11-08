@@ -3,8 +3,11 @@
 #
 #   crewtier do t2-normal --spec task.md --commit "Add crumbling platforms"
 #   crewtier do t2-normal --commit "Add wind zones" <<'EOF'
-#   ...the spec, ending with:  Done when: <command>
+#   ...the spec, ending with:  Done when: <command>   (or "Done when: auto": the project's own tests)
 #   EOF
+#
+# If the call is cut off (a shell timeout), the worker keeps going. Run the same command again:
+# it picks the running or finished task back up instead of starting over.
 #
 # Does, in order: save the spec as a task brief → meter the lead → run the task (with
 # --auto-escalate: one fix round on the same worker, then the next tier up) → end the meter →
@@ -41,31 +44,56 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not in a git repo
 cd "$root" || exit 2
 dir=".crewtier"; mkdir -p "$dir/tasks" "$dir/results" "$dir/logs"
 
+mkdir -p "$dir/running"
 # ---- the spec ----
+if [[ -z "$spec" && ! -t 0 ]]; then spec="-"; fi
+[[ -n "$spec" ]] || { echo "no spec: pass --spec FILE or pipe it in"; exit 2; }
+tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+if [[ "$spec" == "-" ]]; then cat >"$tmp"; else cp "$spec" "$tmp" || exit 2; fi
+[[ -s "$tmp" ]] || { echo "the spec is empty"; exit 2; }
+if [[ -n "$verify" ]] && ! grep -qi '^done when:' "$tmp"; then printf '\nDone when: %s\n' "$verify" >>"$tmp"; fi
+hash="$(cksum <"$tmp" | awk '{print $1 "-" $2}')-$tier"
+
+# the same spec cut off earlier (shell timeout)? pick that task back up
+attach=0; pid=""; clean=1
+for jf in "$dir"/running/*.do; do
+  [[ -f "$jf" ]] || continue
+  read -r jh jpid jclean <"$jf"
+  [[ "$jh" == "$hash" ]] || continue
+  task="$(basename "$jf" .do)"; clean="$jclean"
+  if kill -0 "$jpid" 2>/dev/null || [[ -f "$dir/results/$task.json" && "$dir/results/$task.json" -nt "$jf" ]]; then
+    attach=1; pid="$jpid"; echo "… picking up $task (started earlier with this spec)"
+  fi
+  break
+done
+
 if [[ -z "$task" ]]; then
   n=1; while [[ -e "$dir/tasks/D$n.md" || -e "$dir/results/D$n.json" ]]; do n=$((n + 1)); done; task="D$n"
 fi
-brief="$dir/tasks/$task.md"
-if [[ -z "$spec" && ! -t 0 ]]; then spec="-"; fi
-[[ -n "$spec" ]] || { echo "no spec: pass --spec FILE or pipe it in"; exit 2; }
-if [[ "$spec" == "-" ]]; then cat >"$brief"; else cp "$spec" "$brief" || exit 2; fi
-[[ -s "$brief" ]] || { echo "the spec is empty"; exit 2; }
-if [[ -n "$verify" ]] && ! grep -qi '^done when:' "$brief"; then printf '\nDone when: %s\n' "$verify" >>"$brief"; fi
+brief="$dir/tasks/$task.md"; jobf="$dir/running/$task.do"; rcf="$dir/running/$task.rc"
+out="$dir/logs/$task.do.txt"
 
-# commit only what this task changed: the tree has to start clean
-clean=1; [[ -n "$(git status --porcelain -- . ':(exclude).crewtier' 2>/dev/null)" ]] && clean=0
-if [[ -n "$msg" && $clean == 0 ]]; then
-  echo "note: the tree has uncommitted changes, so $task won't be committed automatically"; msg=""
+if [[ $attach == 0 ]]; then
+  cp "$tmp" "$brief"
+  # commit only what this task changed: the tree has to start clean
+  [[ -n "$(git status --porcelain -- . ':(exclude).crewtier' 2>/dev/null)" ]] && clean=0
+  rm -f "$rcf" "$dir/results/$task.json"
+  bash "$here/measure.sh" start "$task" >/dev/null 2>&1
+  args=("$task" "$tier" --spec "$brief")
+  [[ $escalate == 1 ]] && args+=(--auto-escalate)
+  [[ $isolated == 1 ]] && args+=(--isolated)
+  # own session, so the worker outlives this call if the lead's shell kills it
+  if command -v setsid >/dev/null; then DETACH=(setsid)
+  elif command -v perl >/dev/null; then DETACH=(perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV')
+  else DETACH=(nohup); fi
+  "${DETACH[@]}" bash -c 'bash "$0" "$@"; echo $? >"'"$rcf"'"' "$here/worker.sh" "${args[@]}" </dev/null >"$out" 2>&1 &
+  pid=$!
+  echo "$hash $pid $clean" >"$jobf"
+fi
+if [[ -n "$msg" && "$clean" == 0 ]]; then
+  echo "note: the tree had uncommitted changes, so $task won't be committed automatically"; msg=""
 fi
 
-# ---- run, metered, in this one call ----
-bash "$here/measure.sh" start "$task" >/dev/null 2>&1
-args=("$task" "$tier" --spec "$brief")
-[[ $escalate == 1 ]] && args+=(--auto-escalate)
-[[ $isolated == 1 ]] && args+=(--isolated)
-out="$dir/logs/$task.do.txt"
-bash "$here/worker.sh" "${args[@]}" >"$out" 2>&1 &
-pid=$!
 t0=$SECONDS; next=180
 while kill -0 "$pid" 2>/dev/null; do
   sleep 2
@@ -75,17 +103,21 @@ while kill -0 "$pid" 2>/dev/null; do
     next=$((next + 180))
   fi
 done
-wait "$pid"; rc=$?
+rc="$(cat "$rcf" 2>/dev/null)"; rc="${rc:-1}"
 bash "$here/measure.sh" end "$task" >/dev/null 2>&1
+rm -f "$jobf" "$rcf"
+note() { bash "$here/measure.sh" long-note 2>/dev/null; }
 
 # ---- report ----
 rj="$dir/results/$task.json"
-[[ -f "$rj" ]] || { echo "$task: no result recorded (see $out)"; tail -15 "$out"; exit 1; }
+[[ -f "$rj" ]] || { echo "$task: no result recorded (see $out)"; grep -v '^\s*$' "$out" | tail -6; [[ "$rc" == 3 ]] && exit 3; exit 1; }
 read -r st ft wk md ln nf <<<"$(jq -r '[.status, .tier, (.worker // "-"), (.model // "-"), (.linesChanged // 0), (.touchedFiles | length)] | @tsv' "$rj")"
-mins="$(( (SECONDS - t0) / 60 ))m$(( (SECONDS - t0) % 60 ))s"
+secs="$(jq -r '.seconds // empty' "$rj" 2>/dev/null)"; [[ $attach == 0 || -z "$secs" ]] && secs=$((SECONDS - t0))
+mins="$(( secs / 60 ))m$(( secs % 60 ))s"
+chk=""; [[ "$(jq -r '.verify.result? // .verify // "none"' "$rj" 2>/dev/null)" == none ]] && chk=" · no check found, untested"
 
 if [[ "$st" == done ]]; then
-  line="$task PASS $wk/$md · $ln lines ($nf files) · $mins"
+  line="$task PASS $wk/$md · $ln lines ($nf files) · $mins$chk"
   if [[ $isolated == 1 ]]; then echo "$line · patch: crewtier apply $task"; exit 0; fi
   if [[ -n "$msg" ]]; then
     git add -A -- . ':(exclude).crewtier' 2>/dev/null
@@ -93,7 +125,7 @@ if [[ "$st" == done ]]; then
       line="$line · commit $(git rev-parse --short HEAD)"
     else line="$line · commit failed (changes left in the tree)"; fi
   fi
-  echo "$line"; exit 0
+  echo "$line"; note; exit 0
 fi
 
 if [[ "$st" == verify-error ]]; then
@@ -107,4 +139,5 @@ vt="$dir/tasks/$task.verify.txt"
 [[ -s "$vt" ]] && { echo "verify output (last 20 lines):"; grep -v '^\s*$' "$vt" | tail -20 | sed 's/^/  | /'; }
 ls "$dir/patches/$task".* 2>/dev/null | sed 's/^/attempt: /'
 echo "log: $out"
+note
 case "$rc" in 3) exit 3 ;; 124) exit 124 ;; *) exit 1 ;; esac

@@ -74,6 +74,28 @@ plan="$dir/plan.md"; brief="$tasks/$task.md"; last="$dir/last-$task"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=adapters.sh
 source "$here/adapters.sh"
+
+# "Done when: auto" (or no Done when line): find the project's own check after the worker ran,
+# so the lead never has to read the repo just to learn its test command
+detect_check() {  # $1 dir -> prints a command, or nothing
+  local d="$1" pm="npm" pre="" c=""
+  if [[ -f "$d/package.json" ]]; then
+    if [[ -f "$d/pnpm-lock.yaml" ]] || grep -q '"packageManager": *"pnpm' "$d/package.json"; then pm=pnpm
+    elif [[ -f "$d/yarn.lock" ]]; then pm=yarn
+    elif [[ -f "$d/bun.lockb" || -f "$d/bun.lock" ]]; then pm=bun; fi
+    [[ -d "$d/node_modules" ]] || pre="$pm install && "
+    jq -e '.scripts.typecheck // empty' "$d/package.json" >/dev/null 2>&1 && c="$pm run typecheck"
+    if jq -e '.scripts.test // "" | test("no test specified") | not' "$d/package.json" >/dev/null 2>&1 \
+       && [[ -n "$(jq -r '.scripts.test // empty' "$d/package.json")" ]]; then c="${c:+$c && }$pm test"; fi
+    [[ -n "$c" ]] && { echo "$pre$c"; return; }
+  fi
+  [[ -f "$d/Cargo.toml" ]] && { echo "cargo test"; return; }
+  [[ -f "$d/go.mod" ]] && { echo "go vet ./... && go test ./..."; return; }
+  if [[ -f "$d/pyproject.toml" || -f "$d/pytest.ini" || -f "$d/setup.cfg" ]] && ls -d "$d"/test* >/dev/null 2>&1; then echo "python3 -m pytest -q"; return; fi
+  [[ -f "$d/mix.exs" ]] && { echo "mix test"; return; }
+  [[ -f "$d/deno.json" || -f "$d/deno.jsonc" ]] && { echo "deno test"; return; }
+  [[ -f "$d/Makefile" ]] && grep -qE '^test:' "$d/Makefile" && { echo "make test"; return; }
+}
 health="$state/health.tsv"
 
 # ---- brief: a self-contained task file, so prompts never go through shell quoting ---------------
@@ -101,8 +123,9 @@ if [[ -z "$verify" && $no_verify == 0 && -f "$brief" ]]; then
   else
     verify="$vline"
   fi
+  if [[ -z "$verify" || "$verify" =~ ^[Aa]uto([[:space:].]|$) ]]; then verify="@auto"
   # only run it if it looks like a command, not prose
-  [[ "$verify" =~ ^[A-Za-z0-9_./-]+([[:space:]]|$) ]] && command -v "${verify%% *}" >/dev/null 2>&1 || verify=""
+  elif ! { [[ "$verify" =~ ^[A-Za-z0-9_./-]+([[:space:]]|$) ]] && command -v "${verify%% *}" >/dev/null 2>&1; }; then verify="@auto"; fi
 fi
 [[ $no_verify == 1 ]] && verify=""
 
@@ -165,7 +188,9 @@ $CONTRACT"
   candidates="$(cat "$last")"; resume=1
 else
   ro=""; [[ $readonly_ == 1 ]] && ro=" This is a READ-ONLY task: do not create, edit or delete any files; only read, analyze and report."
-  vf=""; [[ -n "$verify" ]] && vf=" Before finishing, run \`$verify\` and fix any failures it shows."
+  vf=""
+  if [[ "$verify" == "@auto" ]]; then vf=" Before finishing, run the project's tests (and its type check or build, if it has one) and fix any failures."
+  elif [[ -n "$verify" ]]; then vf=" Before finishing, run \`$verify\` and fix any failures it shows."; fi
   prompt="You are a worker agent. Read $brief and do exactly that task, nothing else.$ro Start from the files it lists; only search the wider repo if you must.$vf Do not commit.
 $CONTRACT"
   candidates="$(jq -c --arg t "$tier" '.tiers[$t][]?' "$routing")"; resume=0
@@ -276,6 +301,7 @@ else
 fi
 
 vres="none"; vtail=""
+if [[ "$verify" == "@auto" ]]; then verify="$(detect_check "$work")"; [[ -n "$verify" ]] && echo "check (found in the project): $verify"; fi
 if [[ $code -eq 0 && -n "$verify" ]]; then
   VTO=(); [[ ${#TO[@]} -gt 0 ]] && VTO=("${TO[0]}" --kill-after=10 "${CREWTIER_VERIFY_TIMEOUT:-900}")
   ( cd "$work" && ${VTO[@]+"${VTO[@]}"} bash -c "$verify" ) >"$tasks/$task.verify.raw" 2>&1; vcode=$?
@@ -320,7 +346,7 @@ echo "crewtier $task [$tier] $ran — $status — $dur"
 [[ -n "$skipped" ]] && echo "route: skipped ${skipped}"
 if [[ -n "$diffstat" ]]; then echo "diff:"; printf '%s\n' "$diffstat" | sed 's/^/  /'; else echo "diff: no changes"; fi
 [[ $readonly_ == 1 && -n "$diffstat" ]] && echo "WARNING: read-only task changed files — review or discard them"
-[[ -n "$verify" ]] && echo "verify: $verify → $vres"
+[[ -n "$verify" && "$verify" != "@auto" ]] && echo "verify: $verify → $vres"
 [[ -n "$vtail" ]] && { printf '%s\n' "$vtail" | sed 's/^/  | /'; echo "  → send it back: crewtier run $task $tier --fix"; }
 if [[ -n "$block" ]]; then echo "result:"; printf '%s\n' "$block" | sed 's/^/  /'
 else echo "result (no result block, last lines):"; printf '%s\n' "$out" | grep -v '^\s*$' | tail -"${CREWTIER_TAIL:-10}" | sed 's/^/  /'; fi

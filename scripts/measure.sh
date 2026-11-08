@@ -151,6 +151,13 @@ case "${1:-}" in
     n="$(ls "$meter"/*.start 2>/dev/null | wc -l | tr -d ' ')"; rm -f "$meter"/*.start "$meter"/*.overlap 2>/dev/null
     echo "cleared $n open meter(s)" ;;
 
+  long-note)   # one line for `do` to print when the lead's conversation has grown expensive to re-read
+    f="$(transcript)"; [[ -n "$f" && -f "$f" ]] || exit 0
+    totals_of "$lead" "$f" | jq -r '(.in + 5*.out + 1.25*.cw + 0.1*.cr) as $u
+      | if ($u > 2000000) and ((0.1*.cr) / $u > 0.6)
+        then "note: this conversation is now mostly re-reading itself (\(((0.1*.cr) / $u * 100) | floor)% of the lead cost). Start a fresh session for the next feature: routing and results carry over."
+        else empty end' 2>/dev/null ;;
+
   session)   # the lead's whole current session, read from its own transcript: no meter needed
     f="$(transcript)"
     if [[ -z "$f" || ! -f "$f" ]]; then

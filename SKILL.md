@@ -13,27 +13,25 @@ Your cost has two parts: **output** (code you type, the priciest tokens) and **r
 
 1. **Do it yourself unless the task is big.** Delegate only work you expect to be about 300+ changed lines, already decided (no design choices left), and checkable by a command. Never split a task into smaller ones just to delegate them. Never delegate auth, payments, secrets, real-data migrations, CI/deploy config, or bulk deletes.
 2. **One turn per delegated task.** Use `crewtier do` (below). Don't call `health`, `meter`, `run` or `apply` separately, and don't write a plan file for a single task.
-3. **Don't read code to write the spec.** If the user or a task file already describes the work, pass it as is. The worker explores the code at its own cost. Read code yourself only for a real design decision.
+3. **Don't read code to write the spec.** Describe the behaviour the user asked for; the worker finds the files at its own cost. Not sure of the test command? Write `Done when: auto` and `do` finds the project's own check. If you truly can't say where something goes, ask `crewtier scout "<question>"`: a cheap worker reads the code and answers in a few lines, so the files never enter your context. Read code yourself only for a real design decision.
 4. **Don't review a pass.** When `do` prints `PASS`, take it: no `git diff`, no opening the files. Look only when it fails. Tell the user in two or three sentences what was built and that the check passed; don't restate the spec point by point (output tokens are the expensive ones).
-5. **Keep your context small.** Read a file of up to ~400 lines in one go rather than in slices over several turns; for bigger files, search first and read only the part you need. Never `cat` big files, lockfiles, or logs; redirect long command output to a file and read its tail. Screenshots and other images are the heaviest thing you can add: take one only when you must see something, not to confirm every small change. Send "where is X / list every caller of Y" questions to a worker with `crewtier run <id> t1-easy --read-only --spec -`.
+5. **Keep your context small.** Read a file of up to ~400 lines in one go rather than in slices over several turns; for bigger files, search first and read only the part you need. Never `cat` big files, lockfiles, or logs; redirect long command output to a file and read its tail. Screenshots and other images are the heaviest thing you can add: take one only when you must see something, not to confirm every small change. Send "where is X / list every caller of Y" questions to `crewtier scout`.
 6. **Start fresh per feature.** After a feature is committed in a long conversation, tell the user once that a new session for the next feature costs much less. Everything crewtier keeps carries over.
 
 ## Delegating a task
 
-Call it once and wait for it to finish. It can take several minutes, so give the shell call a long timeout (in Claude Code, `timeout: 600000`). Don't run it in the background and check on it: each check is another full re-read of your context. Budget: reading this skill once plus one `do` call per task. A benchmark lead doing the same tasks itself needed 3 to 11 turns, so every extra turn you spend on delegation eats the saving.
+Call it once and wait for it to finish. It can take several minutes, so give the shell call a long timeout (in Claude Code, `timeout: 600000`). Don't run it in the background and check on it: each check is another full re-read of your context. If the call is cut off anyway, run the exact same command again: the worker kept going, and `do` picks it back up. Budget: one `do` call per task, then a two-sentence report. A benchmark lead doing the same tasks itself needed 3 to 11 turns, so every extra turn you spend on delegation eats the saving.
 
-```bash
-CREWTIER_LEAD=<lead> crewtier do t2-normal --spec path/to/spec.md --commit "Add crumbling platforms"
-```
-
-If the spec already exists in a file, pass its path; don't retype it (that's paid output). Otherwise pipe it in:
+Write the spec straight into the call (one turn; writing a file first and then calling `do` is two):
 
 ```bash
 CREWTIER_LEAD=<lead> crewtier do t2-normal --commit "Add crumbling platforms" <<'EOF'
-<what to build, which files, constraints>
-Done when: `<command that proves it, e.g. pnpm test>`
+<what to build, as behaviour and constraints, under ~40 lines, no code>
+Done when: `<command that proves it, e.g. pnpm test>`   (or: Done when: auto)
 EOF
 ```
+
+If the spec already exists in a file, pass `--spec path/to/spec.md` instead; don't retype it (that's paid output).
 
 - `<lead>` is your CLI's binary name (`claude`, `codex`, `gemini`, …); Claude Code is detected automatically.
 - Pick the tier by **difficulty**, not size (size only decides whether to delegate at all): `t1-easy` for big but mechanical work (many tests, boilerplate, docs, repetitive changes across files), `t2-normal` for a feature with a clear spec, `t3-hard` for tricky logic or cross-module refactors. A cheaper tier saves the worker's quota, and if it fails `do` moves up a tier on its own.

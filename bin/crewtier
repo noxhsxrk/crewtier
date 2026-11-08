@@ -72,6 +72,7 @@ ${c_bold}Install${c_off}
       --skip-login                 don't run the sign-in check first
   crewtier login [agent…]      sign-in check: list agents, sign in to more, repeat until you're done
   crewtier do <tier> --spec F [--commit "msg"]   delegate one task in one call: run, check, escalate, commit
+  crewtier scout "<question>"                    a cheap worker answers a question about the code in a few lines
   crewtier update               update crewtier to the latest release
   crewtier refresh              rewrite skill links and the rules in agent rules files for this version
   crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
@@ -176,8 +177,14 @@ rules_text() {  # $1 names (space separated)  $2 path to SKILL.md as the agent s
   fi
   cat <<EOF
 ## crewtier
-$who Do coding work yourself unless a task is big (about 300+ changed lines), already decided, and checkable by a command. For those, hand the typing to another coding agent in one call, and wait for it (long shell timeout, don't poll):
-\`${prefix}crewtier do <t1-easy|t2-normal|t3-hard> --spec <spec file> --commit "<message>"\` (or pipe the spec in). The spec ends with \`Done when: <command>\`. On PASS, report it in a few sentences and move on: no diff review, no restating the spec. Don't check the install first; \`do\` reports what's missing. Read \`$skill\` only to set up workers or when \`do\` fails.
+$who Do coding work yourself unless a task is big (about 300+ changed lines), already decided, and checkable. For those, hand the typing to another coding agent in one shell call and wait for it (long timeout, don't poll):
+\`\`\`
+${prefix}crewtier do <t1-easy|t2-normal|t3-hard> --commit "<message>" <<'SPEC'
+<what to build, as behaviour, under ~40 lines, no code>
+Done when: <test command, or auto>
+SPEC
+\`\`\`
+Write the spec from the request without reading code: the worker reads the code. If you can't say where things go, \`${prefix}crewtier scout "<question>"\` answers in a few lines. On PASS, tell the user in two or three sentences and move on: no diff review, no restating the spec. If the call gets cut off, run the exact same command again. Don't check the install first. Read \`$skill\` only when \`do\` fails or to set up workers.
 EOF
 }
 
@@ -953,6 +960,7 @@ case "${1:-help}" in
   enable)      shift; [[ $# -gt 0 ]] || { say "usage: crewtier enable <agent…>"; exit 2; }; set_worker on "$@" ;;
   run)         shift; exec bash "$S/worker.sh" "$@" ;;
   do)          shift; exec bash "$S/do.sh" "$@" ;;
+  scout)       shift; exec bash "$S/scout.sh" "$@" ;;
   run-many)    shift; cmd_run_many "$@" ;;
   apply)       shift; cmd_apply "${1:?usage: crewtier apply <task>}" ;;
   discard)     shift; cmd_discard "${1:?usage: crewtier discard <task>}" ;;

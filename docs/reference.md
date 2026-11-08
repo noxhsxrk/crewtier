@@ -247,6 +247,8 @@ crewtier uninstall --scope local         # remove this repo's local install
 crewtier uninstall --scope user --lead codex
 crewtier uninstall                       # everything (project/local: the repo you're in)
 crewtier init --dry-run                  # preview any init
+crewtier do <tier> [--spec F] [--commit "msg"]   # one task in one call; "Done when: auto" uses the project's own tests; rerun the same command to pick up a cut-off call
+crewtier scout "<question>"              # a read-only cheap worker answers about the code in ≤15 lines
 crewtier doctor                          # deps, installs, routing files, worker health, agents
 ```
 
