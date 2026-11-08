@@ -475,12 +475,19 @@ cmd_update() {
   [[ -n "$latest" ]] || { warn "couldn't reach npm to check the latest version"; }
   if [[ -n "$latest" && "$latest" == "$VERSION" ]]; then ok "already on the latest version ($VERSION)"; return 0; fi
   say "Updating crewtier ${VERSION} → ${latest:-latest}"
-  if command -v pnpm >/dev/null; then runner=(pnpm dlx "$pkg@latest")
-  elif command -v npx >/dev/null; then runner=(npx -y --prefer-online "$pkg@latest")
-  elif command -v bunx >/dev/null; then runner=(bunx "$pkg@latest")
+  # ask for the exact version: with @latest, pnpm dlx and npx can reuse an older copy from their cache
+  local want="${latest:-latest}"
+  if command -v pnpm >/dev/null; then runner=(pnpm dlx "$pkg@$want")
+  elif command -v npx >/dev/null; then runner=(npx -y --prefer-online "$pkg@$want")
+  elif command -v bunx >/dev/null; then runner=(bunx "$pkg@$want")
   else say "Needs pnpm, npm or bun. Or: curl -fsSL https://raw.githubusercontent.com/noxhsxrk/crewtier/main/install.sh | bash"; exit 1; fi
-  "${runner[@]}" self-install >/dev/null || { warn "update failed: run  ${runner[*]} init"; exit 1; }
-  ok "updated to $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$APP/package.json" 2>/dev/null | head -1)"
+  "${runner[@]}" self-install >/dev/null 2>&1 || { warn "update failed: run  ${runner[*]} init"; exit 1; }
+  local now; now="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$APP/package.json" 2>/dev/null | head -1)"
+  if [[ -n "$latest" && "$now" != "$latest" ]]; then
+    warn "still on $now: a cached copy got in the way. Try:  npx -y --prefer-online $pkg@$latest self-install"
+    exit 1
+  fi
+  ok "updated to $now"
   # skills installed per repo (project scope) are copies: they don't follow the app
   local repos; repos="$(awk -F'|' '$1=="project"{print $2}' "$MANIFEST" 2>/dev/null | sort -u)"
   if [[ -n "$repos" ]]; then
