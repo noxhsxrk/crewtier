@@ -1,0 +1,40 @@
+# crewtier working files (per repo)
+.crewtier/
+*.crewtier.bak
+
+# maintainer tools, kept local
+release.sh
+
+# Node / package managers (crewtier has no dependencies)
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lockb
+bun.lock
+.pnpm-store/
+*.tgz
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (assets/demo/render.py)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# misc
+*.log
+.env
+.env.*
+tmp/

@@ -1,0 +1,891 @@
+#!/usr/bin/env bash
+# crewtier — install, discovery, routing and measurement in one command.
+# Works with bash 3.2 (macOS default): no associative arrays.
+set -uo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  d="$(cd -P "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"; [[ "$src" != /* ]] && src="$d/$src"
+done
+ROOT="$(cd -P "$(dirname "$src")/.." && pwd)"
+S="$ROOT/scripts"
+VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$ROOT/package.json" 2>/dev/null | head -1)"; VERSION="${VERSION:-?}"
+# shellcheck source=../scripts/tui.sh
+source "$S/tui.sh"
+STATE="$HOME/.crewtier"
+MANIFEST="$STATE/installed.tsv"     # scope | base dir | kind | path | lead(s)   (what init created, for uninstall)
+CUSTOM="$STATE/custom-leads"        # leads added with --lead X --rules/--skills (user scope)
+H="$HOME"
+
+MARK_START="<!-- crewtier:start -->"
+MARK_END="<!-- crewtier:end -->"
+VENDOR=".agents/skills/crewtier"   # where project/local scope puts the one shared copy of the skill
+
+# lead | USER: skills dir, mode, rules file | PROJECT (relative to repo root): skills dir, mode, rules file
+#   mode block = marked block inside a shared file; file = a whole file we own; - = no file-based rules
+LEADS="
+claude       | $H/.claude/skills                 | block | $H/.claude/CLAUDE.md                     | .claude/skills    | block | CLAUDE.md
+codex        | $H/.codex/skills                  | block | $H/.codex/AGENTS.md                      | .codex/skills     | block | AGENTS.md
+opencode     | $H/.config/opencode/skills        | block | $H/.config/opencode/AGENTS.md            | -                 | block | AGENTS.md
+agy          | $H/.gemini/antigravity-cli/skills | block | $H/.gemini/GEMINI.md                     | -                 | block | GEMINI.md
+gemini       | $H/.gemini/skills                 | block | $H/.gemini/GEMINI.md                     | .gemini/skills    | block | GEMINI.md
+copilot      | $H/.copilot/skills                | block | $H/.copilot/copilot-instructions.md      | .github/skills    | block | .github/copilot-instructions.md
+cursor-agent | -                                 | file  | $H/.cursor/rules/crewtier.mdc        | -                 | file  | .cursor/rules/crewtier.mdc
+amp          | -                                 | block | $H/.config/amp/AGENTS.md                 | -                 | block | AGENTS.md
+qwen         | -                                 | block | $H/.qwen/QWEN.md                         | -                 | block | QWEN.md
+crush        | $H/.config/crush/skills           | block | $H/.config/crush/CRUSH.md                | -                 | block | CRUSH.md
+goose        | -                                 | block | $H/.config/goose/.goosehints             | -                 | block | .goosehints
+kiro-cli     | -                                 | file  | $H/.kiro/steering/crewtier.md        | -                 | file  | .kiro/steering/crewtier.md
+droid        | $H/.factory/skills                | block | $H/.factory/AGENTS.md                    | .factory/skills   | block | AGENTS.md
+kimi         | -                                 | block | $H/.kimi/AGENTS.md                       | -                 | block | AGENTS.md
+cline        | -                                 | file  | $H/Documents/Cline/Rules/crewtier.md | -                 | file  | .clinerules/crewtier.md
+cn           | -                                 | file  | $H/.continue/rules/crewtier.md       | -                 | file  | .continue/rules/crewtier.md
+kilocode     | -                                 | file  | $H/.kilocode/rules/crewtier.md       | -                 | file  | .kilocode/rules/crewtier.md
+aider        | -                                 | -     | -                                        | -                 | -     | -
+"
+
+c_bold=$'\e[1m'; c_dim=$'\e[2m'; c_ok=$'\e[32m'; c_warn=$'\e[33m'; c_off=$'\e[0m'
+[[ -t 1 ]] || { c_bold=; c_dim=; c_ok=; c_warn=; c_off=; }
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '  %s✓%s %s\n' "$c_ok" "$c_off" "$*"; }
+warn() { printf '  %s!%s %s\n' "$c_warn" "$c_off" "$*"; }
+trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
+
+usage() {
+  cat <<EOF
+${c_bold}crewtier $VERSION${c_off} — your agent plans and reviews; the other coding agents on your machine write the code
+
+${c_bold}Install${c_off}
+  npx @noxhsxrk/crewtier init   (or pnpm dlx / bunx) — copies itself to ~/.crewtier/app,
+                                    links ~/.local/bin/crewtier, then runs init. Run again to update.
+  crewtier init [options]
+      --scope user|project|local   where to install (default: user)
+                                   user    = your home folder, every repo, only you
+                                   project = this repo, committed, shared with your team
+                                   local   = this repo, only you (kept out of git via .git/info/exclude)
+      --lead <name>                only this lead agent (repeatable). Default: pick from the agents found
+      --all                        every lead found, no prompt
+      --lead <name> --rules <file> [--skills <dir>]   a lead that isn't in the list yet (user scope)
+      --no-auto                    skill only; don't add the "use crewtier by default" rules
+      --copy                       user scope: copy instead of symlinking the skill
+      --dry-run                    show what would change
+      --skip-login                 don't run the sign-in check first
+  crewtier login [agent…]      sign-in check: list agents, sign in to more, repeat until you're done
+  crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
+  crewtier routing [add|remove|first|edit]   show or change which worker/model each tier uses
+  crewtier agents add <bin>    use another agent CLI as a worker
+  crewtier workers             which workers are on or off, and their last health result
+  crewtier disable <agent…>    never use these as workers (also asked about during init)
+  crewtier enable <agent…>     turn them back on
+  crewtier leads [--scope …]   supported leads and where init writes for each
+  crewtier prompt <lead>       print the rules text, for agents configured by hand
+  crewtier status              what's installed, per scope and lead
+  crewtier uninstall [--scope user|project|local|all] [--lead <name>]
+  crewtier doctor              dependencies, install state, agents on this machine
+
+${c_bold}Use${c_off} (normally called by the lead agent)
+  crewtier agents [--models|--json]          coding-agent CLIs on this machine
+  crewtier health [--force|--cached] [agent…] which workers are signed in and still have credit
+  crewtier run <task> <tier> [options]         send one task to a worker, verify it, print a short summary
+      --fix ["msg"]  --isolated  --read-only  --verify "cmd"  --no-verify  --timeout SEC  --spec FILE|-
+  crewtier run-many T1:t1-easy T2:t2-normal …  run tasks in parallel, each in its own worktree
+  crewtier apply <task> | discard <task>       apply / drop the patch from an isolated run
+  crewtier bench --lead claude|codex --task "…" [--test "cmd"]   A/B: lead alone vs lead + crewtier
+  crewtier trust [dir]                         approve a repo's vendored copy (project scope) to run
+  crewtier meter start|end …                 lead token cost per task
+  crewtier report | models [--check] | session   savings, worker track record & cost per task, session totals
+
+The lead identifies itself with CREWTIER_LEAD=<its binary name>; init writes that into each agent's rules.
+EOF
+}
+
+# --- stable home --------------------------------------------------------------
+# When run through npx / pnpm dlx / bunx, ROOT sits in a package cache that can be wiped at any
+# time, so links into it would break. init copies the app to ~/.crewtier/app first and puts
+# a launcher in ~/.local/bin. A git checkout or a global npm install is used where it is.
+APP="$STATE/app"
+BINDIR="${CREWTIER_BIN_DIR:-$HOME/.local/bin}"
+
+root_is_ephemeral() {
+  [[ "$ROOT" == "$APP" || -d "$ROOT/.git" || "${CREWTIER_NO_SELF_INSTALL:-}" == 1 ]] && return 1
+  case "$ROOT" in
+    */_npx/*|*/dlx*|*/.cache/*|*/Caches/*|*/.bun/install/*|/tmp/*|/private/var/*|/var/folders/*) return 0 ;;
+  esac
+  return 1
+}
+
+install_app() {  # copy this package to $APP and link the launcher; prints the launcher path
+  mkdir -p "$STATE" "$BINDIR"
+  local tmp="$APP.new.$$"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  cp -R "$ROOT/." "$tmp/"; rm -rf "$tmp/.git" "$tmp/node_modules"
+  chmod +x "$tmp/bin/crewtier" "$tmp"/scripts/*.sh 2>/dev/null
+  rm -rf "$APP"; mv "$tmp" "$APP"
+  ln -sf "$APP/bin/crewtier" "$BINDIR/crewtier"
+  printf '  %s✓%s app installed → %s\n' "$c_ok" "$c_off" "${APP/#$H/~}" >&2
+  printf '  %s✓%s command linked → %s\n' "$c_ok" "$c_off" "${BINDIR/#$H/~}/crewtier" >&2
+  case ":$PATH:" in *":$BINDIR:"*) ;; *)
+    printf '  %s!%s %s is not on your PATH. Add to your shell profile:  export PATH="%s:$PATH"\n' "$c_warn" "$c_off" "$BINDIR" "$BINDIR" >&2 ;;
+  esac
+}
+
+# --- table ------------------------------------------------------------------
+each_lead() {  # "lead|uskills|umode|urules|pskills|pmode|prules"
+  { printf '%s\n' "$LEADS"; [[ -f "$CUSTOM" ]] && cat "$CUSTOM"; } | while IFS='|' read -r a b c d e f g; do
+    a=$(trim "$a"); [[ -z "$a" ]] && continue
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$a" "$(trim "$b")" "$(trim "$c")" "$(trim "$d")" "$(trim "${e:--}")" "$(trim "${f:--}")" "$(trim "${g:--}")"
+  done
+}
+
+lead_present() {  # $1 lead $2 user rules
+  [[ -f "$CUSTOM" ]] && grep -q "^$1|" "$CUSTOM" && return 0
+  command -v "$1" >/dev/null && return 0
+  local d; d="$(dirname "$2")"
+  [[ "$2" != "-" && -d "$d" && "$d" != "$H/.config" && "$d" != "$H" && "$d" != "$H/Documents" ]] && return 0
+  return 1
+}
+
+repo_root() { git rev-parse --show-toplevel 2>/dev/null; }
+
+CUR_LEAD="*"
+record() { mkdir -p "$STATE"; printf '%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "${5:-$CUR_LEAD}" >>"$MANIFEST"; }
+rev_lines() { awk '{a[NR]=$0} END{for(i=NR;i>0;i--)print a[i]}' "$1"; }
+
+exclude_local() {  # $1 repo root  $2 path relative to root
+  local ex="$1/.git/info/exclude"; mkdir -p "$(dirname "$ex")"; touch "$ex"
+  grep -qxF "/$2" "$ex" || { echo "/$2" >>"$ex"; record local "$1" exclude "/$2"; }
+}
+
+is_tracked() { git -C "$1" ls-files --error-unmatch -- "$2" >/dev/null 2>&1; }
+
+# --- rules text -------------------------------------------------------------
+rules_text() {  # $1 names (space separated)  $2 path to SKILL.md as the agent should read it
+  local names="$1" skill="$2" who prefix
+  if [[ "$names" == *" "* ]]; then
+    who="You are the lead. Set \`CREWTIER_LEAD\` to your own CLI name (one of: ${names// /, })."
+    prefix='CREWTIER_LEAD=<you> '
+  else
+    who="You are the lead (\`CREWTIER_LEAD=$names\`)."; prefix="CREWTIER_LEAD=$names "
+  fi
+  cat <<EOF
+## crewtier
+$who When asked to build, implement, fix or refactor code in a git repo, use the crewtier skill: read \`$skill\` and follow it. At the start of each session where you will route work, run \`${prefix}crewtier health\` and tell the user in one line about any worker that is signed out or out of credit. Plan and review yourself; send the typing to other coding agents with \`${prefix}crewtier run\` (or the scripts next to that SKILL.md if the command isn't installed). Do it yourself when the change is ~20 lines or less, or the work is mostly design, debugging or security. To start, the user can ask "which agents do I have?" or "set up crewtier".
+EOF
+}
+
+strip_block() {
+  local f="$1"; [[ -f "$f" ]] || return 0
+  awk -v s="$MARK_START" -v e="$MARK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  awk 'NF{for(;n>0;n--)print ""; print; next} {n++}' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  [[ -s "$f" ]] || rm -f "$f"
+}
+
+write_rules() {  # $1 scope $2 base $3 mode $4 abs path $5 names $6 skill path for text
+  local scope="$1" base="$2" mode="$3" f="$4" names="$5" skill="$6"
+  mkdir -p "$(dirname "$f")"
+  if [[ "$mode" == "file" ]]; then
+    { [[ "$f" == *.mdc ]] && printf -- '---\ndescription: crewtier lead rules\nalwaysApply: true\n---\n\n'
+      rules_text "$names" "$skill"; } >"$f"
+    record "$scope" "$base" file "$f" "$names"
+  else
+    [[ "$scope" == user && -f "$f" && ! -f "$f.crewtier.bak" ]] && cp "$f" "$f.crewtier.bak"
+    local existed=0; [[ -f "$f" ]] && existed=1
+    strip_block "$f"
+    { [[ -s "$f" ]] && echo; echo "$MARK_START"; rules_text "$names" "$skill"; echo "$MARK_END"; } >>"$f"
+    record "$scope" "$base" block "$f" "$names"
+    [[ $existed == 0 ]] && record "$scope" "$base" created "$f" "$names"
+  fi
+}
+
+# --- skill placement ----------------------------------------------------------
+vendor_skill() {  # $1 scope $2 repo root  -> puts one copy (project) or link (local) at $VENDOR
+  local scope="$1" root="$2" dest="$2/$VENDOR"
+  [[ -e "$dest" || -L "$dest" ]] && return 0
+  mkdir -p "$(dirname "$dest")"
+  if [[ "$scope" == project ]]; then
+    cp -R "$ROOT" "$dest"; rm -rf "$dest/.git"; ok "skill copied into repo → $VENDOR (commit it)"
+    source "$S/adapters.sh" 2>/dev/null; printf '%s|%s|%s\n' "$(crewtier_hash "$dest")" "$(cd -P "$dest" && pwd)" "$(date +%F)" >>"$STATE/trusted.tsv"
+  else
+    ln -s "$ROOT" "$dest"; ok "skill linked → $VENDOR"; exclude_local "$root" "$VENDOR"
+  fi
+  record "$scope" "$root" skill "$dest" "*"
+}
+
+link_into() {  # $1 scope $2 base $3 skills dir (abs) $4 copy  — make skills/crewtier point at the skill
+  local scope="$1" base="$2" dir="$3" copy="$4" dest="$3/crewtier"
+  if [[ -e "$dest" && ! -L "$dest" ]]; then ok "skill already at $dest"; return; fi
+  mkdir -p "$dir"; rm -f "$dest"
+  if [[ "$scope" == user ]]; then
+    if [[ "$copy" == 1 ]]; then cp -R "$ROOT" "$dest"; rm -rf "$dest/.git"; else ln -s "$ROOT" "$dest"; fi
+  else
+    # relative link to the vendored copy, so it works on every clone of the repo
+    local rel; rel="$(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$base/$VENDOR" "$dir" 2>/dev/null)"
+    [[ -n "$rel" ]] || rel="$base/$VENDOR"
+    ln -s "$rel" "$dest"
+    [[ "$scope" == local ]] && exclude_local "$base" "${dest#$base/}"
+  fi
+  record "$scope" "$base" skill "$dest"
+  ok "skill → ${dest#$base/}"
+}
+
+# --- login wizard ----------------------------------------------------------------
+# Lists installed agent CLIs with their sign-in status, asks whether to go with the signed-in ones
+# or sign in to more, runs the chosen CLI's own login, re-checks, and repeats until the user is done.
+health_line() { awk -F'|' -v a="$1" '$1==a{s=$2"|"$3} END{print s}' "$STATE/health.tsv" 2>/dev/null; }
+
+# --- add your own agents ------------------------------------------------------------
+# crewtier agents add <binary> [--headless 'cmd ... {prompt}'] [--name "Display name"]
+# Without --headless it uses the known headless form from discover.sh, if there is one.
+cmd_agent_add() {
+  local bin="" tpl="" name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --headless) tpl="${2:?}"; shift 2 ;;
+      --name) name="${2:?}"; shift 2 ;;
+      -*) say "unknown option $1"; exit 2 ;;
+      *) bin="$1"; shift ;;
+    esac
+  done
+  [[ -n "$bin" ]] || { say "usage: crewtier agents add <binary> [--headless 'cmd ... {prompt}'] [--name \"Name\"]"; exit 2; }
+  case " $BUILTIN_BACKENDS " in *" $bin "*) ok "$bin already has a built-in adapter"; return 0;; esac
+  if [[ -z "$tpl" ]]; then
+    local row; row="$(sed -n "/^AGENTS='/,/^'/p" "$S/discover.sh" | awk -F'|' -v b="$bin" '{x=$2; gsub(/ /,"",x)} x==b')"
+    tpl="$(awk -F'|' '{print $3}' <<<"$row" | sed 's/^ *//; s/ *$//; s/"<prompt>"/{prompt}/')"
+    [[ -n "$name" ]] || name="$(awk -F'|' '{print $1}' <<<"$row" | sed 's/ *$//')"
+    [[ -n "$tpl" ]] || { say "crewtier doesn't know how to run $bin headless yet."; say "Check \`$bin --help\` for its one-shot mode, then:  crewtier agents add $bin --headless '$bin <flags> {prompt}'"; exit 2; }
+  fi
+  [[ "$tpl" == *"{prompt}"* ]] || { say "the --headless command must contain {prompt}"; exit 2; }
+  local P='{prompt}' Q='"{prompt}"'; tpl="${tpl//"$Q"/$P}"
+  command -v "$bin" >/dev/null || warn "$bin is not on your PATH yet; it is skipped until it is"
+  mkdir -p "$STATE"; local f="$STATE/agents.tsv"; touch "$f"
+  grep -v "^[^|]*|$bin|" "$f" >"$f.tmp"; mv "$f.tmp" "$f"
+  echo "${name:-$bin}|$bin|$tpl" >>"$f"
+  ok "added $bin: runs \`${tpl}\`"
+  say "  ${c_dim}check it:  crewtier health --force --verbose $bin${c_off}"
+  [[ -n "${CREWTIER_QUIET_ADD:-}" ]] || suggest_retier "$bin"
+}
+cmd_agent_remove() {
+  local f="$STATE/agents.tsv"
+  grep -q "^[^|]*|$1|" "$f" 2>/dev/null || { say "$1 isn't a user-added agent"; exit 1; }
+  grep -v "^[^|]*|$1|" "$f" >"$f.tmp"; mv "$f.tmp" "$f"; ok "removed $1"
+}
+
+# --- edit the routing file without a lead ----------------------------------------------
+#   crewtier routing [--lead X]                                show it
+#   crewtier routing add <tier> <agent> <model> [--effort E] [--first] [--paid]
+#   crewtier routing remove <tier> <agent> [model]
+#   crewtier routing first <tier> <agent> [model]              move to the top of the tier
+#   crewtier routing edit                                      open it in $EDITOR
+routing_file() {  # picks the lead from --lead, CREWTIER_LEAD, Claude Code, or the only routing file there is
+  local lead="${R_LEAD:-${CREWTIER_LEAD:-}}"
+  [[ -z "$lead" && "${CLAUDECODE:-}" == 1 ]] && lead=claude
+  if [[ -z "$lead" ]]; then
+    local files; files="$(ls "$STATE"/routing.*.json 2>/dev/null)"
+    if [[ $(printf '%s\n' "$files" | sed '/^$/d' | wc -l) -eq 1 ]]; then lead="$(basename "$files" .json)"; lead="${lead#routing.}"
+    else say "Which lead's routing? Add --lead <name>  (have: $(ls "$STATE"/routing.*.json 2>/dev/null | sed 's#.*/routing\.##; s#\.json##' | tr '\n' ' '))" >&2; return 1; fi
+  fi
+  echo "$STATE/routing.$lead.json"
+}
+cmd_routing() {
+  R_LEAD=""; local args=() a
+  while [[ $# -gt 0 ]]; do case "$1" in --lead) R_LEAD="${2:?}"; shift 2;; *) args+=("$1"); shift;; esac; done
+  set -- ${args[@]+"${args[@]}"}
+  local f; f="$(routing_file)" || exit 2
+  local sub="${1:-show}"; shift 2>/dev/null || true
+  local tiers="t1-easy t2-normal t3-hard"
+  case "$sub" in
+    show|ls|list)
+      [[ -f "$f" ]] || { say "No routing file yet ($f)."; say "Ask your lead to \"set up crewtier\", or start one:  crewtier routing add t1-easy <agent> <model>"; return 0; }
+      say "${c_bold}${f/#$H/~}${c_off}"
+      jq -r '.tiers | to_entries[] | "\(.key)|\([.value[] | "\(.backend)/\(.model // "default")\(if .effort then "@"+.effort else "" end)\(if .paid then " (paid)" else "" end)"] | join("  →  "))"' "$f" \
+        | while IFS='|' read -r t list; do printf '  %-10s %s\n' "$t" "$list"; done
+      local off; off="$(cat "$DISABLED" 2>/dev/null | tr '\n' ' ')"; [[ -n "$off" ]] && say "  ${c_dim}turned off (skipped even if listed): $off${c_off}"
+      say "  ${c_dim}lead: everything else. Change it: crewtier routing add|remove|first|edit${c_off}" ;;
+    add)
+      local t="${1:-}" b="${2:-}" m="${3:-}"; shift 3 2>/dev/null || true
+      [[ -n "$t" && -n "$b" && -n "$m" ]] || { say "usage: crewtier routing add <tier> <agent> <model> [--effort E] [--first] [--paid]"; exit 2; }
+      local eff="" first=0 paid=false
+      while [[ $# -gt 0 ]]; do case "$1" in --effort) eff="${2:?}"; shift 2;; --first) first=1; shift;; --paid) paid=true; shift;; *) say "unknown option $1"; exit 2;; esac; done
+      case " $tiers " in *" $t "*) ;; *) say "tier must be one of: $tiers"; exit 2;; esac
+      valid_worker "$b" || warn "$b has no adapter yet (crewtier agents add $b), it will be skipped until it does"
+      local known; known="$(list_models "$b" 2>/dev/null | awk '{print $1}')"
+      [[ -n "$known" ]] && ! grep -qxF "$m" <<<"$known" && warn "$b doesn't list a model called $m (see: crewtier agents --models)"
+      mkdir -p "$STATE"; [[ -f "$f" ]] || jq -n --arg l "$(basename "$f" .json | sed 's/^routing\.//')" '{lead:$l, allow_paid:false, tiers:{}}' >"$f"
+      jq --arg t "$t" --arg b "$b" --arg m "$m" --arg e "$eff" --argjson p "$paid" --argjson first "$first" '
+        ({backend:$b, model:$m} + (if $e != "" then {effort:$e} else {} end) + (if $p then {paid:true} else {} end)) as $c
+        | .tiers[$t] = ((.tiers[$t] // []) | map(select(.backend != $b or .model != $m))
+                        | if $first == 1 then [$c] + . else . + [$c] end)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+      ok "$t: added $b/$m$( [[ $first == 1 ]] && echo " at the top")"; cmd_routing --lead "$(basename "$f" .json | sed 's/^routing\.//')" show ;;
+    remove|rm)
+      local t="${1:-}" b="${2:-}" m="${3:-}"
+      [[ -n "$t" && -n "$b" && -f "$f" ]] || { say "usage: crewtier routing remove <tier> <agent> [model]"; exit 2; }
+      jq --arg t "$t" --arg b "$b" --arg m "$m" '.tiers[$t] = ((.tiers[$t] // []) | map(select(.backend != $b or ($m != "" and .model != $m))))' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+      ok "$t: removed $b${m:+/$m}"; cmd_routing --lead "$(basename "$f" .json | sed 's/^routing\.//')" show ;;
+    first|top)
+      local t="${1:-}" b="${2:-}" m="${3:-}"
+      [[ -n "$t" && -n "$b" && -f "$f" ]] || { say "usage: crewtier routing first <tier> <agent> [model]"; exit 2; }
+      jq --arg t "$t" --arg b "$b" --arg m "$m" '(.tiers[$t] // []) as $l
+        | ($l | map(select(.backend == $b and ($m == "" or .model == $m)))) as $hit
+        | .tiers[$t] = $hit + ($l - $hit)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+      ok "$t: $b${m:+/$m} goes first"; cmd_routing --lead "$(basename "$f" .json | sed 's/^routing\.//')" show ;;
+    edit)
+      [[ -f "$f" ]] || { cp "$ROOT/routing.example.json" "$f"; }
+      "${VISUAL:-${EDITOR:-vi}}" "$f"
+      jq empty "$f" 2>/dev/null && ok "saved ${f/#$H/~}" || warn "${f/#$H/~} is not valid JSON now; fix it before the next run" ;;
+    *) say "usage: crewtier routing [show|add|remove|first|edit] [--lead X]"; exit 2 ;;
+  esac
+}
+
+# After workers change, print a prompt the user can paste into their lead agent to rebuild the tiers.
+suggest_retier() {  # agents that were just added or turned on
+  local who="$*"
+  say ""
+  say "${c_bold}Next: let your lead agent rebuild the tiers.${c_off} Paste this into it:"
+  say ""
+  say "  ${c_ok}I just added ${who:-new workers} to crewtier. Run \`crewtier health --force\` and \`crewtier agents --models\`,"
+  say "  then propose a new tier table for my routing file using only the model names those commands list."
+  say "  Put each model where its description and size fit, keep my current picks unless the new ones are"
+  say "  clearly better, say which names you couldn't verify, and wait for my OK before saving.${c_off}"
+  say ""
+  say "  ${c_dim}Or change it yourself: crewtier setup → Routing${c_off}"
+}
+
+# --- interactive setup hub: crewtier setup (or plain `crewtier` in a terminal) -----------------------
+setup_add_agents() {  # checklist of agent CLIs on this machine that aren't wired up yet
+  ADD_BIN=(); ADD_NAME=(); ADD_TPL=()
+  local row name bin tpl
+  while IFS='|' read -r name bin tpl backend; do
+    bin="$(trim "$bin")"; [[ -z "$bin" ]] && continue
+    command -v "$bin" >/dev/null || continue
+    case " $WORKERS " in *" $bin "*) continue;; esac
+    ADD_BIN+=("$bin"); ADD_NAME+=("$(trim "$name")"); ADD_TPL+=("$(trim "$tpl")")
+  done <<<"$(sed -n "/^AGENTS='/,/^'/p" "$S/discover.sh" | sed '1d;$d')"
+  if [[ ${#ADD_BIN[@]} -eq 0 ]]; then
+    say "  ${c_dim}Every agent CLI found on this machine is already set up.${c_off}"
+    say "  ${c_dim}One that crewtier doesn't know?  crewtier agents add <binary> --headless '<binary> ... {prompt}'${c_off}"; return 0
+  fi
+  MENU_SEL=(); local i; for ((i = 0; i < ${#ADD_BIN[@]}; i++)); do MENU_SEL[$i]=0; done
+  render_add() { printf '%-16s %s%s%s' "${ADD_NAME[$1]}" "$c_dim" "${ADD_TPL[$1]}" "$c_off"; }
+  menu_multi "Add which agents as workers? (found on this machine, not set up yet)" "up/down move · space select · enter add · q back" "${#ADD_BIN[@]}" render_add || return 0
+  local added=""
+  for ((i = 0; i < ${#ADD_BIN[@]}; i++)); do [[ "${MENU_SEL[$i]}" == 1 ]] && { CREWTIER_QUIET_ADD=1 cmd_agent_add "${ADD_BIN[$i]}" | head -1; added="$added ${ADD_BIN[$i]}"; }; done
+  WORKERS="$(all_backends)"
+  [[ -n "$added" ]] || return 0
+  say "  ${c_dim}headless commands come from public docs: check each with  crewtier health --force --verbose <agent>${c_off}"
+  suggest_retier $added
+}
+
+setup_routing_tier() {  # $1 tier: checklist of every model the workers offer; space = in/out, f = first
+  local t="$1" f; f="$(routing_file)" || return 0
+  mkdir -p "$STATE"; [[ -f "$f" ]] || jq -n --arg l "$(basename "$f" .json | sed 's/^routing\.//')" '{lead:$l, allow_paid:false, tiers:{}}' >"$f"
+  RB=(); RM=(); RE=(); MENU_SEL=(); RNOTE=()
+  local b m e note n=0
+  # current candidates first, in order
+  while IFS='|' read -r b m e; do
+    [[ -z "$b" ]] && continue
+    RB+=("$b"); RM+=("$m"); RE+=("$e"); RNOTE+=(""); MENU_SEL[$n]=1; n=$((n + 1))
+  done <<<"$(jq -r --arg t "$t" '.tiers[$t][]? | "\(.backend)|\(.model // "")|\(.effort // "")"' "$f")"
+  # then every model each enabled worker lists
+  local lead_now; lead_now="$(basename "$f" .json | sed 's/^routing\.//')"
+  for b in $WORKERS; do
+    command -v "$b" >/dev/null || continue; worker_off "$b" && continue; [[ "$b" == "$lead_now" ]] && continue
+    while read -r m note; do
+      [[ -z "$m" || "$m" == "("* ]] && continue
+      local dup=0 i; for ((i = 0; i < n; i++)); do [[ "${RB[$i]}" == "$b" && "${RM[$i]}" == "$m" ]] && dup=1; done
+      [[ $dup == 1 ]] && continue
+      RB+=("$b"); RM+=("$m"); RE+=(""); RNOTE+=("$note"); MENU_SEL[$n]=0; n=$((n + 1))
+    done <<<"$(list_models "$b" 2>/dev/null)"
+  done
+  render_rt() { printf '%-9s %-30s %s%s%s' "${RB[$1]}" "${RM[$1]}${RE[$1]:+ @${RE[$1]}}" "$c_dim" "${RNOTE[$1]:0:50}" "$c_off"; }
+  key_rt() {
+    case "$1" in
+      f) local i="$2" tb="${RB[$2]}" tm="${RM[$2]}" te="${RE[$2]}" tn="${RNOTE[$2]}"
+         while [[ $i -gt 0 ]]; do
+           RB[$i]="${RB[$((i-1))]}"; RM[$i]="${RM[$((i-1))]}"; RE[$i]="${RE[$((i-1))]}"; RNOTE[$i]="${RNOTE[$((i-1))]}"; MENU_SEL[$i]="${MENU_SEL[$((i-1))]}"; i=$((i-1))
+         done
+         RB[0]="$tb"; RM[0]="$tm"; RE[0]="$te"; RNOTE[0]="$tn"; MENU_SEL[0]=1; cur=0; return 0 ;;   # cur belongs to menu_multi (bash dynamic scope)
+      e) printf '\n  effort for %s/%s (low, medium, high, … empty = none): ' "${RB[$2]}" "${RM[$2]}" >/dev/tty
+         local ef; read -r ef </dev/tty; RE[$2]="$ef"; MENU_SEL[$2]=1; return 2 ;;
+      m) printf '\n  add a model by hand, as "<agent> <model>": ' >/dev/tty
+         local ab am; read -r ab am </dev/tty
+         [[ -n "$ab" && -n "$am" ]] || return 2
+         local k=${#RB[@]}; RB[$k]="$ab"; RM[$k]="$am"; RE[$k]=""; RNOTE[$k]="(added by hand)"; MENU_SEL[$k]=1; return 2 ;;
+    esac
+    return 0
+  }
+  [[ $n -gt 0 ]] || { RB=("?"); RM=("press m to add a model"); RE=(""); RNOTE=(""); MENU_SEL=(0); n=1; }
+  while :; do
+    local before=${#RB[@]}
+    menu_multi "Tier $t: which models, in this order? (tried top to bottom)" "up/down · space in/out · f first · e effort · m add by hand · enter save · q back" "${#RB[@]}" render_rt key_rt || { say "  ${c_dim}$t unchanged${c_off}"; return 0; }
+    break
+  done
+  local json="[]" i
+  for ((i = 0; i < ${#RB[@]}; i++)); do
+    [[ "${MENU_SEL[$i]:-0}" == 1 && "${RB[$i]}" != "?" ]] || continue
+    json="$(jq -c --arg b "${RB[$i]}" --arg m "${RM[$i]}" --arg e "${RE[$i]}" '. + [{backend:$b, model:$m} + (if $e != "" then {effort:$e} else {} end)]' <<<"$json")"
+  done
+  jq --arg t "$t" --argjson c "$json" '.tiers[$t] = $c' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  ok "saved $t"
+}
+
+setup_routing() {
+  local f; f="$(routing_file)" || return 0
+  local tiers=(t1-easy t2-normal t3-hard)
+  while :; do
+    render_tier() {
+      local t="${tiers[$1]:-}" list=""
+      [[ -n "$t" ]] || { printf '← back'; return; }
+      list="$(jq -r --arg t "$t" '[.tiers[$t][]? | "\(.backend)/\(.model)"] | join(" → ")' "$f" 2>/dev/null)"
+      printf '%-10s %s%s%s' "$t" "$c_dim" "${list:-(empty)}" "$c_off"
+    }
+    MENU_PICK=${MENU_PICK:-0}
+    menu_single "Routing: pick a tier to change" "up/down · enter open · q back" 4 render_tier || return 0
+    [[ $MENU_PICK == 3 ]] && return 0
+    local keep=$MENU_PICK
+    setup_routing_tier "${tiers[$MENU_PICK]}"; MENU_PICK=$keep; say ""
+  done
+}
+
+cmd_setup() {
+  tui_ok || { say "crewtier setup needs a terminal. Use: crewtier login · crewtier agents add · crewtier routing"; exit 2; }
+  local items=("Workers: sign in, turn on or off" "Add agents found on this machine" "Routing: which model handles each tier" "Install the skill for more lead agents" "Done")
+  render_hub() { printf '%s' "${items[$1]}"; }
+  MENU_PICK=0
+  while :; do
+    say ""
+    menu_single "crewtier setup" "up/down · enter choose · q quit" "${#items[@]}" render_hub || break
+    local pick=$MENU_PICK; say ""
+    case $pick in
+      0) login_menu ;;
+      1) setup_add_agents ;;
+      2) MENU_PICK=0; setup_routing ;;
+      3) cmd_init --skip-login ;;
+      4) break ;;
+    esac
+    MENU_PICK=$pick
+  done
+  say "${c_dim}Run  crewtier setup  any time to change these.${c_off}"
+}
+
+# --- turn workers on / off ---------------------------------------------------------
+# ~/.crewtier/disabled lists backends that must never be used as workers. health.sh doesn't check
+# them, worker.sh skips them, and `crewtier agents` shows them as "off".
+source "$S/adapters.sh" 2>/dev/null; WORKERS="$(all_backends)"
+DISABLED="$STATE/disabled"
+worker_off() { grep -qxF "$1" "$DISABLED" 2>/dev/null; }
+valid_worker() { case " $WORKERS " in *" $1 "*) return 0;; esac; return 1; }
+set_worker() {  # on|off agent…
+  local mode="$1"; shift; local a; mkdir -p "$STATE"; touch "$DISABLED"
+  for a in "$@"; do
+    valid_worker "$a" || { warn "unknown agent '$a' (known: $WORKERS)"; continue; }
+    grep -vxF "$a" "$DISABLED" >"$DISABLED.tmp" 2>/dev/null; mv "$DISABLED.tmp" "$DISABLED"
+    if [[ $mode == off ]]; then echo "$a" >>"$DISABLED"; ok "$a turned off: it will not be used as a worker"
+    else ok "$a turned on"; fi
+  done
+}
+cmd_workers() {
+  local b st hl; say "${c_bold}Workers${c_off}"
+  for b in $WORKERS; do
+    command -v "$b" >/dev/null || continue
+    hl="$(health_line "$b")"; st="${hl%%|*}"
+    if worker_off "$b"; then printf '  %-9s %soff%s   (crewtier enable %s)\n' "$b" "$c_warn" "$c_off" "$b"
+    else printf '  %-9s on    %s\n' "$b" "${st:-not checked yet}"; fi
+  done
+  say "${c_dim}crewtier disable <agent…> · crewtier enable <agent…>${c_off}"
+}
+
+do_login() {  # $1 agent
+  source "$S/adapters.sh"
+  local lc cmd what; lc="$(login_cmd "$1")"; cmd="${lc%%|*}"; what="${lc#*|}"
+  command -v "$1" >/dev/null || { warn "$1 is not installed"; return; }
+  say ""; say "${c_bold}→ $1${c_off}: running \`$cmd\` — $what"
+  # shellcheck disable=SC2086
+  $cmd </dev/tty >/dev/tty 2>&1 || true
+  say "  checking $1 …"
+  bash "$S/health.sh" --force "$1" >/dev/null 2>&1
+  local hl st; hl="$(health_line "$1")"; st="${hl%%|*}"
+  [[ "$st" == ready ]] && ok "$1 is ready" || warn "$1: ${st:-unknown} — ${hl#*|}"
+}
+
+login_menu() {  # one checklist: which workers to use, with `s` to sign in to the highlighted one
+  say "${c_bold}Checking which agent CLIs are signed in${c_off} ${c_dim}(a one-word ping per agent; uses a few of that agent's tokens)${c_off}"
+  bash "$S/health.sh" --installed --force >/dev/null 2>&1
+  source "$S/adapters.sh"
+  PICK=(); local b
+  for b in $WORKERS; do command -v "$b" >/dev/null && PICK+=("$b"); done
+  [[ ${#PICK[@]} -gt 0 ]] || { say "No supported agent CLIs found. Install one (Claude Code, Codex, opencode, Gemini, Antigravity, Copilot) and run this again."; return 1; }
+  MENU_SEL=(); local i; WAS_OFF="$(cat "$DISABLED" 2>/dev/null)"
+  for ((i = 0; i < ${#PICK[@]}; i++)); do worker_off "${PICK[$i]}" && MENU_SEL[$i]=0 || MENU_SEL[$i]=1; done
+  render_worker() {
+    local b="${PICK[$1]}" hl st det; hl="$(health_line "$b")"; st="${hl%%|*}"; det="${hl#*|}"
+    if [[ "$st" == ready ]]; then printf '%-9s %s✓ signed in%s' "$b" "$c_ok" "$c_off"
+    else printf '%-9s %s✗ %s%s  %s(press s to sign in)%s' "$b" "$c_warn" "${st:-unknown}" "$c_off" "$c_dim" "$c_off"; fi
+  }
+  key_worker() {  # s = sign in to the highlighted agent
+    [[ "$1" == s ]] || return 0
+    do_login "${PICK[$2]}"
+    [[ "$(health_line "${PICK[$2]}")" == ready* ]] && MENU_SEL[$2]=1
+    say ""; return 2
+  }
+  say ""
+  if ! menu_multi "Which agents may crewtier use as workers?" "up/down move · space on/off · s sign in · a all · n none · enter done · q cancel" "${#PICK[@]}" render_worker key_worker; then
+    say "  ${c_dim}cancelled: worker choices unchanged${c_off}"; return 0
+  fi
+  mkdir -p "$STATE"; : >"$DISABLED"
+  local used="" off=""
+  for ((i = 0; i < ${#PICK[@]}; i++)); do
+    if [[ "${MENU_SEL[$i]}" == 1 ]]; then used="$used ${PICK[$i]}"; else echo "${PICK[$i]}" >>"$DISABLED"; off="$off ${PICK[$i]}"; fi
+  done
+  say ""
+  ok "workers on:${used:- none}"
+  [[ -n "$off" ]] && say "  ${c_dim}turned off:$off (change later: crewtier enable|disable <agent>)${c_off}"
+  for b in $used; do [[ "$(health_line "$b")" == ready* ]] || warn "$b is on but not signed in: it is skipped until you run  crewtier login $b"; done
+  local newly=""; for b in $used; do grep -qxF "$b" <<<"${WAS_OFF:-}" && newly="$newly $b"; done
+  [[ -n "$newly" && -n "$(ls "$STATE"/routing.*.json 2>/dev/null)" ]] && suggest_retier $newly
+  return 0
+}
+
+cmd_login() {
+  if [[ $# -gt 0 ]]; then for a in "$@"; do do_login "$a"; done; return; fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    bash "$S/health.sh" --installed
+    say "Sign in from a terminal: crewtier login <agent>  (in Claude Code you can type: ! crewtier login <agent>)"
+    return
+  fi
+  if tui_ok; then login_menu; return; fi
+  say "${c_bold}Checking which agent CLIs are signed in${c_off} ${c_dim}(a one-word ping per agent; uses a few of that agent's tokens)${c_off}"
+  bash "$S/health.sh" --installed --force >/dev/null 2>&1
+  while :; do
+    local list="" i=0 ready=0
+    source "$S/adapters.sh"
+    for b in $WORKERS; do command -v "$b" >/dev/null && list="$list $b"; done
+    [[ -n "$list" ]] || { say "No supported agent CLIs found. Install one (Claude Code, Codex, opencode, Gemini, Antigravity, Copilot) and run this again."; return 1; }
+    say ""
+    for b in $list; do
+      i=$((i+1)); local hl st det; hl="$(health_line "$b")"; st="${hl%%|*}"; det="${hl#*|}"
+      local off=""; worker_off "$b" && off=" ${c_dim}(turned off)${c_off}"
+      [[ "$st" == ready ]] && { ready=$((ready+1)); printf '  %d) %-9s %s✓ signed in%s%s\n' "$i" "$b" "$c_ok" "$c_off" "$off"; } \
+                           || printf '  %d) %-9s %s✗ %s%s %s%s\n' "$i" "$b" "$c_warn" "${st:-unknown}" "$c_off" "${c_dim}${det}${c_off}" "$off"
+    done
+    say ""
+    printf 'Go with the %d signed-in agent(s)? [Enter] = yes, or type numbers to sign in (e.g. 2 4): ' "$ready"
+    local ans; read -r ans </dev/tty || ans=""
+    [[ -z "$ans" || "$ans" =~ ^[yYoO] ]] && break
+    for n in $ans; do
+      local pick; pick="$(echo $list | tr ' ' '\n' | sed -n "${n}p")"
+      [[ -n "$pick" ]] && do_login "$pick" || warn "no agent number $n"
+    done
+  done
+  # second question: leave some out?
+  local avail=""; for b in $WORKERS; do command -v "$b" >/dev/null && avail="$avail $b"; done
+  say ""
+  i=0; for b in $avail; do i=$((i+1)); printf '  %d) %s%s\n' "$i" "$b" "$(worker_off "$b" && echo " (off)")"; done
+  printf 'Leave any out? Type the numbers to turn off (e.g. 3 4), "none" to use all, or Enter to keep as is: '
+  local skipans; read -r skipans </dev/tty || skipans=""
+  if [[ "$skipans" == none ]]; then : >"$DISABLED"
+  elif [[ -n "$skipans" ]]; then
+    : >"$DISABLED"
+    for n in $skipans; do
+      local pick; pick="$(echo $avail | tr ' ' '\n' | sed -n "${n}p")"
+      [[ -n "$pick" ]] && echo "$pick" >>"$DISABLED" || warn "no agent number $n"
+    done
+  fi
+  say ""
+  ok "using: $(for b in $WORKERS; do worker_off "$b" && continue; [[ "$(health_line "$b")" == ready* ]] && printf '%s ' "$b"; done)"
+  [[ -s "$DISABLED" ]] && say "  ${c_dim}turned off: $(tr '\n' ' ' <"$DISABLED")(change later: crewtier enable|disable <agent>)${c_off}"
+  return 0
+}
+
+# --- init ---------------------------------------------------------------------
+pick_leads() {  # stdin: candidate lines; prints chosen lines. Interactive when a terminal is attached.
+  local lines; lines="$(cat)"
+  if [[ ! -t 2 ]] || ! tui_ok; then printf '%s\n' "$lines"; return; fi   # stdout is captured, so ask stderr
+  LEAD_NAMES=(); local l
+  while IFS='|' read -r l _; do LEAD_NAMES+=("$l"); done <<<"$lines"
+  MENU_SEL=(); local i; for ((i = 0; i < ${#LEAD_NAMES[@]}; i++)); do MENU_SEL[$i]=1; done
+  render_lead() { printf '%s' "${LEAD_NAMES[$1]}"; }
+  say "" >&2
+  if ! menu_multi "Install for which lead agents?" "up/down move · space on/off · a all · n none · enter done · q cancel" "${#LEAD_NAMES[@]}" render_lead; then return; fi
+  local idx=0
+  while IFS= read -r l; do
+    [[ "${MENU_SEL[$idx]:-0}" == 1 ]] && printf '%s\n' "$l"
+    idx=$((idx + 1))
+  done <<<"$lines"
+}
+
+cmd_init() {
+  local only="" scope=user copy=0 auto=1 dry=0 all=0 c_rules="" c_skills="" skip_login=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --scope) scope="${2:?}"; shift 2 ;;
+      --lead|--agent) only="$only ${2:?--lead needs a name}"; shift 2 ;;
+      --all) all=1; shift ;;
+      --rules) c_rules="${2:?}"; shift 2 ;;
+      --skills) c_skills="${2:?}"; shift 2 ;;
+      --copy) copy=1; shift ;;
+      --no-auto) auto=0; shift ;;
+      --dry-run) dry=1; shift ;;
+      --skip-login) skip_login=1; shift ;;
+      -g|--global) scope=user; shift ;;
+      *) say "unknown option $1"; exit 2 ;;
+    esac
+  done
+  case "$scope" in user|project|local) ;; *) say "--scope must be user, project or local"; exit 2 ;; esac
+  for dep in git jq; do command -v "$dep" >/dev/null || warn "$dep not found — install it before using crewtier"; done
+
+  # step 1: who's signed in (interactive terminals only)
+  if [[ $dry == 0 && $skip_login == 0 && -t 0 && -t 1 ]]; then cmd_login; say ""; fi
+
+  local base="$H"
+  if [[ "$scope" != user ]]; then
+    base="$(repo_root)" || true
+    [[ -n "$base" ]] || { say "--scope $scope must be run inside a git repo"; exit 2; }
+  fi
+
+  # custom lead (user scope)
+  if [[ -n "$c_rules" || -n "$c_skills" ]]; then
+    local n; n=$(trim "$only"); [[ -n "$n" && "$n" != *" "* ]] || { say "--rules/--skills need exactly one --lead <name>"; exit 2; }
+    [[ "$scope" == user ]] || { say "--rules/--skills are for --scope user"; exit 2; }
+    if [[ $dry == 0 ]]; then
+      mkdir -p "$STATE"; touch "$CUSTOM"; grep -v "^$n|" "$CUSTOM" >"$CUSTOM.tmp"; mv "$CUSTOM.tmp" "$CUSTOM"
+      local m=block; [[ -z "$c_rules" ]] && m=-
+      echo "$n|${c_skills:--}|$m|${c_rules:--}|-|-|-" >>"$CUSTOM"
+    fi
+    only=" $n"
+  fi
+
+  # candidates
+  local cand=""
+  while IFS='|' read -r lead us um ur ps pm pr; do
+    if [[ -n "$only" ]]; then [[ " $only " == *" $lead "* ]] || continue
+    else lead_present "$lead" "$ur" || continue; fi
+    cand="$cand$lead|$us|$um|$ur|$ps|$pm|$pr"$'\n'
+  done <<<"$(each_lead)"
+  cand="$(printf '%s' "$cand" | sed '/^$/d')"
+  [[ -n "$cand" ]] || { say "No lead agent found. See \`crewtier leads\`, or name one with --lead."; exit 1; }
+  local sel="$cand"
+  [[ -z "$only" && $all == 0 && $dry == 0 ]] && sel="$(printf '%s\n' "$cand" | pick_leads)"
+  [[ -n "$sel" ]] || { say "Nothing selected."; exit 0; }
+
+  say "${c_bold}scope: $scope${c_off} ${c_dim}($base)${c_off}"
+  [[ $dry == 0 ]] && mkdir -p "$STATE"
+
+  # skill path the rules text should point to
+  local skillref="$ROOT/SKILL.md"
+  if [[ "$scope" != user ]]; then
+    skillref="$VENDOR/SKILL.md"
+    [[ $dry == 1 ]] && say "    would put the skill at $VENDOR" || vendor_skill "$scope" "$base"
+  fi
+
+  local done_rules=""
+  while IFS='|' read -r lead us um ur ps pm pr; do
+    local sdir mode rules
+    if [[ "$scope" == user ]]; then sdir="$us"; mode="$um"; rules="$ur"
+    else sdir="$ps"; [[ "$ps" != "-" ]] && sdir="$base/$ps"; mode="$pm"; rules="$pr"
+      # agents with a built-in personal, git-ignored rules file
+      if [[ "$scope" == local ]]; then
+        case "$lead" in claude) rules="CLAUDE.local.md" ;; qwen) rules=".qwen/QWEN.local.md" ;; esac
+      fi
+      [[ "$rules" != "-" ]] && rules="$base/$rules"; fi
+    say "${c_bold}$lead${c_off}"
+    CUR_LEAD="$lead"
+
+    if [[ "$sdir" != "-" ]]; then
+      if [[ "$scope" == user && "$lead" == opencode ]] && [[ -e "$H/.claude/skills/crewtier" || -e "$H/.agents/skills/crewtier" ]]; then
+        ok "skill already visible to opencode via ~/.claude/skills or ~/.agents/skills"
+      elif [[ $dry == 1 ]]; then say "    would link skill → $sdir/crewtier"
+      else link_into "$scope" "$base" "$sdir" "$copy"; fi
+    elif [[ "$scope" != user ]]; then
+      ok "reads the shared skill at $VENDOR or follows the rules file"
+    fi
+
+    [[ $auto == 1 ]] || continue
+    if [[ "$mode" == "-" ]]; then warn "no file-based rules — run \`crewtier prompt $lead\` and add it to its config"; continue; fi
+    if [[ "$done_rules" == *"|$rules|"* ]]; then ok "rules shared with an agent above (${rules#$base/})"; continue; fi
+    if [[ "$scope" == local ]] && is_tracked "$base" "${rules#$base/}"; then
+      warn "${rules#$base/} is tracked by git — can't keep a local-only block in it. Use --scope user, or project."
+      continue
+    fi
+    local names; names=$(printf '%s\n' "$sel" | awk -F'|' -v sc="$scope" -v r="${rules#$base/}" -v b="$base/" '
+      { rr = (sc=="user") ? $4 : $7
+        if (sc=="local" && $1=="claude") rr="CLAUDE.local.md"
+        if (sc=="local" && $1=="qwen") rr=".qwen/QWEN.local.md"
+        if (rr==r || b rr==r) printf "%s%s", (n++?" ":""), $1 }')
+    [[ -n "$names" ]] || names="$lead"
+    if [[ $dry == 1 ]]; then say "    would write rules → $rules"
+    else
+      write_rules "$scope" "$base" "$mode" "$rules" "$names" "$skillref"
+      [[ "$scope" == local ]] && exclude_local "$base" "${rules#$base/}"
+      ok "rules → ${rules#$base/}"
+    fi
+    done_rules="$done_rules|$rules|"
+  done <<<"$sel"
+
+  say ""
+  case "$scope" in
+    project) say "Commit the new files so your team gets them: ${c_bold}git add -A && git commit -m \"Add crewtier\"${c_off}"
+             say "${c_dim}Teammates also need the CLI (./install.sh) or they can call the scripts in $VENDOR/scripts.${c_off}" ;;
+    local)   say "${c_dim}Everything added is listed in .git/info/exclude, so it stays out of commits.${c_off}" ;;
+  esac
+  say "Next: open your agent in a repo and ask ${c_bold}\"set up crewtier\"${c_off}."
+}
+
+# --- isolated runs -------------------------------------------------------------------
+cmd_run_many() {  # T1:t1-easy T2:t2-normal ... (extra flags after -- go to every run)
+  local specs=() extra=()
+  while [[ $# -gt 0 ]]; do [[ "$1" == -- ]] && { shift; extra=("$@"); break; }; specs+=("$1"); shift; done
+  [[ ${#specs[@]} -gt 0 ]] || { say "usage: crewtier run-many T1:t1-easy T2:t1-easy [-- --no-verify]"; exit 2; }
+  local root; root="$(repo_root)" || { say "run inside a git repo"; exit 2; }
+  mkdir -p "$root/.crewtier/logs"; local pids=() t
+  for sp in "${specs[@]}"; do
+    t="${sp%%:*}"
+    bash "$S/worker.sh" "$t" "${sp#*:}" --isolated ${extra[@]+"${extra[@]}"} >"$root/.crewtier/logs/$t.summary" 2>&1 &
+    pids+=("$!")
+  done
+  local i=0 rc=0
+  for p in "${pids[@]}"; do wait "$p" || rc=1; done
+  for sp in "${specs[@]}"; do t="${sp%%:*}"; say "──────── $t"; grep -v '^skip ' "$root/.crewtier/logs/$t.summary"; done
+  say "Apply each with: crewtier apply <task>   (patches don't touch your tree until you do)"
+  return $rc
+}
+
+cmd_apply() {
+  local root; root="$(repo_root)" || exit 2
+  local p="$root/.crewtier/patches/$1.patch"
+  [[ -s "$p" ]] || { say "no patch for $1 (empty or missing: ${p#$root/})"; exit 1; }
+  if git -C "$root" apply --3way --whitespace=nowarn "$p"; then ok "applied $1"; cmd_discard "$1" >/dev/null; ok "worktree removed"
+  else warn "patch for $1 didn't apply cleanly — resolve the conflicts, or crewtier discard $1"; exit 1; fi
+}
+
+cmd_discard() {
+  local root; root="$(repo_root)" || exit 2
+  git -C "$root" worktree remove --force "$root/.crewtier/wt/$1" 2>/dev/null
+  rm -f "$root/.crewtier/patches/$1.patch"; ok "discarded isolated run $1"
+}
+
+# --- trust (fail-closed for repo copies) ----------------------------------------------
+cmd_trust() {
+  source "$S/adapters.sh" 2>/dev/null || true
+  local root d; root="$(repo_root)"
+  d="${1:-$root/$VENDOR}"; d="$(cd -P "$d" 2>/dev/null && pwd)" || { say "no crewtier copy at ${1:-$VENDOR}"; exit 1; }
+  [[ -f "$d/SKILL.md" && -d "$d/scripts" ]] || { say "$d doesn't look like a crewtier copy"; exit 1; }
+  local h; h="$(crewtier_hash "$d")"
+  say "${c_bold}crewtier copy:${c_off} $d"
+  if [[ "$d" != "$ROOT" ]]; then
+    local diffs; diffs="$(diff -rq "$ROOT/bin" "$d/bin" 2>&1; diff -rq "$ROOT/scripts" "$d/scripts" 2>&1; diff -q "$ROOT/SKILL.md" "$d/SKILL.md" 2>&1)"
+    if [[ -z "$diffs" ]]; then ok "identical to your installed crewtier ($ROOT)"
+    else warn "differs from your installed crewtier ($ROOT):"; printf '%s\n' "$diffs" | sed 's/^/      /' | head -20
+         say "    review with: diff -ru \"$ROOT/scripts\" \"$d/scripts\""; fi
+  fi
+  if [[ -t 0 && -t 1 ]]; then printf 'Trust this exact copy? [y/N] '; local a; read -r a </dev/tty; [[ "$a" =~ ^[yY] ]] || { say "not trusted"; exit 1; }; fi
+  mkdir -p "$STATE"; printf '%s|%s|%s\n' "$h" "$d" "$(date +%F)" >>"$STATE/trusted.tsv"
+  ok "trusted (${h:0:12}…). Any change to it will need trusting again."
+}
+
+# --- uninstall / status ---------------------------------------------------------
+cmd_uninstall() {
+  local scope=all only="" here; here="$(repo_root)"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --scope) scope="${2:?}"; shift 2 ;; --lead|--agent) only="$only ${2:?}"; shift 2 ;; *) shift ;; esac
+  done
+  [[ -f "$MANIFEST" ]] || { say "Nothing recorded as installed."; return 0; }
+  local keep="$MANIFEST.keep"; : >"$keep"
+  # newest first, so blocks come out before the "created" marker of their file
+  rev_lines "$MANIFEST" | while IFS='|' read -r sc base kind path leads; do
+    local match=1
+    [[ "$scope" != all && "$sc" != "$scope" ]] && match=0
+    # project/local entries only for the repo you're in (unless --scope all)
+    [[ "$scope" != all && "$sc" != user && "$base" != "$here" ]] && match=0
+    if [[ -n "$only" && $match == 1 ]]; then
+      match=0
+      for l in $only; do [[ "$leads" == "$l" ]] && match=1; done
+      [[ $match == 0 && "$leads" == *" "* ]] && for l in $only; do [[ " $leads " == *" $l "* ]] && warn "kept $path: shared with ${leads}"; done
+    fi
+    if [[ $match == 0 ]]; then echo "$sc|$base|$kind|$path|$leads" >>"$keep"; continue; fi
+    case "$kind" in
+      skill)   if [[ -L "$path" ]]; then rm -f "$path"; ok "removed $path"
+               elif [[ -d "$path" ]]; then rm -rf "$path"; ok "removed $path"; fi ;;
+      file)    [[ -f "$path" ]] && rm -f "$path" && ok "removed $path" ;;
+      block)   [[ -f "$path" ]] && grep -qF "$MARK_START" "$path" && { strip_block "$path"; ok "removed block from $path"; } ;;
+      created) [[ -f "$path" && ! -s "$path" ]] && rm -f "$path" ;;
+      exclude) local ex="$base/.git/info/exclude"; [[ -f "$ex" ]] && { grep -vxF "$path" "$ex" >"$ex.tmp"; mv "$ex.tmp" "$ex"; } ;;
+    esac
+  done
+  rev_lines "$keep" >"$MANIFEST"; rm -f "$keep"
+  [[ -s "$MANIFEST" ]] || rm -f "$MANIFEST"
+  say "${c_dim}Routing files and history in $STATE were kept.${c_off}"
+}
+
+cmd_status() {
+  [[ -f "$MANIFEST" ]] || { say "Not installed anywhere yet. Run: crewtier init"; return 0; }
+  printf '  %-8s %-6s %-22s %s\n' SCOPE KIND LEAD PATH
+  awk -F'|' '$3=="skill"||$3=="file"||$3=="block" {printf "  %-8s %-6s %-22s %s\n", $1, $3, $5, $4}' "$MANIFEST" | sed "s#$H#~#g" | sort -u
+}
+
+cmd_leads() {
+  local scope=user; [[ "${1:-}" == --scope ]] && scope="${2:-user}"
+  printf '%s%-13s %-6s %-34s %s%s\n' "$c_bold" LEAD FOUND "SKILL DIR ($scope)" "RULES ($scope)" "$c_off"
+  each_lead | while IFS='|' read -r lead us um ur ps pm pr; do
+    local f=no; lead_present "$lead" "$ur" && f=yes
+    local t="~"; local sk r mode
+    if [[ "$scope" == user ]]; then sk="${us/#$H/$t}"; r="${ur/#$H/$t}"; mode="$um"
+    else sk="$ps"; [[ "$ps" == "-" ]] && sk="($VENDOR)"; r="$pr"; mode="$pm"; fi
+    [[ "$mode" == "-" ]] && r="(by hand: crewtier prompt $lead)"
+    printf '%-13s %-6s %-34s %s\n' "$lead" "$f" "$sk" "$r"
+  done
+  return 0
+}
+
+cmd_doctor() {
+  say "${c_bold}crewtier $VERSION${c_off}  ${c_dim}($ROOT)${c_off}"
+  for dep in bash git jq; do command -v "$dep" >/dev/null && ok "$dep" || warn "$dep missing"; done
+  command -v timeout >/dev/null || command -v gtimeout >/dev/null || warn "no timeout/gtimeout — workers run without a time limit (macOS: brew install coreutils)"
+  command -v crewtier >/dev/null || warn "crewtier is not on PATH — run ./install.sh"
+  say ""; say "${c_bold}Installed${c_off}"; cmd_status
+  say ""; say "${c_bold}Routing files${c_off}"
+  ls "$STATE"/routing.*.json 2>/dev/null | sed "s#$H#~#; s#^#  #" || true
+  [[ -n "$(ls "$STATE"/routing.*.json 2>/dev/null)" ]] || say "  none yet — ask your lead agent to \"set up crewtier\""
+  say ""; say "${c_bold}Worker health${c_off} ${c_dim}(cached; crewtier health --force to re-check)${c_off}"
+  bash "$S/health.sh" --cached
+  say ""; say "${c_bold}Agents on this machine${c_off}"
+  bash "$S/discover.sh"
+}
+
+if [[ $# -eq 0 && -t 0 && -t 1 ]] && tui_ok; then set -- setup; fi
+case "${1:-help}" in
+  init)        shift
+               if root_is_ephemeral; then install_app; exec "$APP/bin/crewtier" init "$@"; fi
+               cmd_init "$@" ;;
+  self-install) install_app ;;
+  leads)       shift; cmd_leads "$@" ;;
+  prompt)      shift; rules_text "${1:?usage: crewtier prompt <lead>}" "$ROOT/SKILL.md" ;;
+  status)      cmd_status ;;
+  uninstall)   shift; cmd_uninstall "$@" ;;
+  doctor)      cmd_doctor ;;
+  agents|list) shift
+               case "${1:-}" in
+                 add)    shift; cmd_agent_add "$@" ;;
+                 remove|rm) shift; cmd_agent_remove "${1:?usage: crewtier agents remove <binary>}" ;;
+                 *)      exec bash "$S/discover.sh" "$@" ;;
+               esac ;;
+  health)      shift; exec bash "$S/health.sh" "$@" ;;
+  login)       shift; cmd_login "$@" ;;
+  workers)     cmd_workers ;;
+  routing)     shift; cmd_routing "$@" ;;
+  setup|config) cmd_setup ;;
+  disable)     shift; [[ $# -gt 0 ]] || { say "usage: crewtier disable <agent…>"; exit 2; }; set_worker off "$@" ;;
+  enable)      shift; [[ $# -gt 0 ]] || { say "usage: crewtier enable <agent…>"; exit 2; }; set_worker on "$@" ;;
+  run)         shift; exec bash "$S/worker.sh" "$@" ;;
+  run-many)    shift; cmd_run_many "$@" ;;
+  apply)       shift; cmd_apply "${1:?usage: crewtier apply <task>}" ;;
+  discard)     shift; cmd_discard "${1:?usage: crewtier discard <task>}" ;;
+  bench)       shift; exec bash "$S/bench.sh" "$@" ;;
+  trust)       shift; cmd_trust "$@" ;;
+  meter)       shift; exec bash "$S/measure.sh" "$@" ;;
+  report)      exec bash "$S/measure.sh" report ;;
+  models)      shift; exec bash "$S/measure.sh" models "$@" ;;
+  session)     exec bash "$S/measure.sh" session ;;
+  version|-v|--version) say "$VERSION" ;;
+  help|-h|--help) usage ;;
+  *) say "unknown command: $1"; usage; exit 2 ;;
+esac

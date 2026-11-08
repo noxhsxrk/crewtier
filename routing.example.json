@@ -1,0 +1,55 @@
+{
+  "_note": "Example for a Codex lead. The lead rebuilds this from the workers actually installed and saves it as ~/.crewtier/routing.<lead>.json. Candidates are tried top to bottom; the lead itself is always skipped.",
+  "lead": "codex",
+  "tiers": {
+    "t1-easy": [
+      {
+        "backend": "agy",
+        "model": "gemini-flash"
+      },
+      {
+        "backend": "claude",
+        "model": "haiku"
+      },
+      {
+        "backend": "opencode",
+        "model": "google/gemini-flash"
+      }
+    ],
+    "t2-normal": [
+      {
+        "backend": "copilot",
+        "model": "claude-sonnet"
+      },
+      {
+        "backend": "claude",
+        "model": "sonnet"
+      },
+      {
+        "backend": "opencode",
+        "model": "openai/gpt"
+      }
+    ],
+    "t3-hard": [
+      {
+        "backend": "claude",
+        "model": "opus"
+      },
+      {
+        "backend": "agy",
+        "model": "gemini-pro"
+      },
+      {
+        "backend": "opencode",
+        "model": "anthropic/claude-opus",
+        "paid": true
+      }
+    ]
+  },
+  "timeouts": {
+    "t1-easy": 600,
+    "t2-normal": 1200,
+    "t3-hard": 2400
+  },
+  "allow_paid": false
+}
