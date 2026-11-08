@@ -19,30 +19,27 @@
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
+  <a href="#does-it-save-anything">Does it save anything?</a> ·
   <a href="#changing-things-later">Changing things later</a> ·
   <a href="#safety">Safety</a> ·
   <a href="#commands">Commands</a> ·
   <a href="docs/reference.md">Reference</a>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/noxhsxrk/crewtier/main/assets/demo/task.gif" alt="A lead agent splits a feature into tiers, sends two tasks to other agents, fixes a failed test through the same worker, does the security part itself, and reports its token savings." width="860">
-</p>
-
 ---
 
-**crewtier** is a skill plus a small CLI that cuts what your main coding agent costs. Whichever agent you talk to (Claude Code, Codex, opencode, Gemini, Antigravity, Copilot, Cursor, and more) becomes the **lead**. It splits your request into small tasks, gives each a difficulty tier, and hands them to the *other* agent CLIs on your machine. You keep using the agent and UI you like.
+**crewtier** is a skill plus a small CLI that lets the coding agent you talk to (Claude Code, Codex, opencode, Gemini, Antigravity, Copilot, Cursor, and more) hand big, already-decided coding tasks to the *other* agent CLIs on your machine, in one call per task. The aim is to spend less of your main agent's tokens and quota. Whether it does depends on task size: see [Does it save anything?](#does-it-save-anything).
 
 ## Features
 
-- **Built to cut the lead's cost.** Workers do the typing, and the lead keeps its own context small (narrow reads, no big logs, exploration sent to workers), because in long sessions re-reading the conversation costs more than writing code. `crewtier session` shows where the cost went.
+- **One call per task.** `crewtier do` saves the spec, runs the worker, checks the result, retries one tier up if it fails, and commits on success. The lead spends one turn on it.
 - **Any agent can lead.** 18 leads supported. Every other installed agent CLI is a worker. crewtier knows about 45 agent CLIs, and `crewtier agents add` wires up any other one.
 - **Tiered routing.** Easy tasks go to a fast, cheap model; hard ones to a strong model; risky ones stay with the lead.
 - **Live model lists.** Model names come straight from each CLI (`codex debug models`, `agy models`, `opencode models`), so the lead never guesses a name.
 - **Sign-in and quota checks.** Every session starts by checking who is signed in and who still has quota. `crewtier login` fixes the rest.
 - **Verified results.** Each task has a check command. A worker's "done" has to show up in git and pass the test.
 - **Clean fallback.** If a worker runs dry or fails, crewtier saves its partial patch, resets, and tries the next one.
-- **Proof, not promises.** `crewtier report` and `crewtier bench` show whether delegating saved the lead anything.
+- **Measured, not assumed.** `crewtier bench` and `crewtier session` show whether delegating saved anything on your own work. Results so far are below, including the bad ones.
 
 ## Quick start
 
@@ -74,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/noxhsxrk/crewtier/main/install.sh |
 Then open your agent in a repo:
 
 1. Say **"set up crewtier"**. The lead lists your workers, proposes a tier table, and saves it once you agree.
-2. Ask for a feature as usual: *"Add pagination to GET /orders, with tests."*
+2. Ask for a big feature as usual. The lead does small work itself and delegates large, well-specified tasks.
 
 See [a day with crewtier](docs/walkthrough.md) for what that looks like.
 
@@ -83,26 +80,40 @@ See [a day with crewtier](docs/walkthrough.md) for what that looks like.
 ```mermaid
 flowchart LR
     U([You]) --> L[Lead agent]
-    L -->|plan + tier per task| R[crewtier run]
-    R -->|brief| W[Worker agent]
+    L -->|one call: spec + tier| D[crewtier do]
+    D -->|brief| W[Worker agent]
     W -->|code| G[(git tree)]
-    R -->|run the check| T{pass?}
-    T -->|yes| S[short summary]
-    T -->|no| F[fix with same worker]
-    F --> R
-    S -->|review, commit| L
+    D -->|run the check| T{pass?}
+    T -->|no| F[fix round, then next tier up]
+    F --> W
+    T -->|yes| C[commit + one-line result]
+    C --> L
 ```
 
-The lead writes a short plan, picks a tier for each task, and `crewtier run` sends it to the first worker in that tier that is installed, signed in, and has quota. Afterwards the lead reads a ten-line summary instead of the whole diff.
+```bash
+crewtier do t2-normal --commit "Add crumbling platforms" <<'EOF'
+Add crumbling platforms from level 31: generator, builder and server script.
+Done when: selene src && rojo build -o check.rbxlx
+EOF
+# D1 PASS codex/gpt-6.1-sol · 412 lines (5 files) · 3m10s · commit abc123
+```
+
+`crewtier do` picks the first worker in the tier that is installed, signed in and has quota, gives a failing worker one fix round, moves up a tier if it still fails, and commits only when the check passes and the tree was clean.
 
 | Tier | Typical task | Goes to |
 |---|---|---|
-| `t1-easy` | boilerplate, renames, simple CRUD, tests, docs | fast, cheap model |
+| `t1-easy` | boilerplate, tests, docs | fast, cheap model |
 | `t2-normal` | a feature across a few files with a clear spec | solid mid model |
-| `t3-hard` | tricky logic, concurrency, cross-module refactors | strongest coding model |
-| `lead` | unclear bugs, design decisions, security-sensitive code | the lead itself |
+| `t3-hard` | tricky logic, cross-module refactors | strongest coding model |
+| `lead` | small edits, unclear bugs, design, security-sensitive code | the lead itself |
 
-The lead only delegates work that is mostly typing, already decided, checkable by a command, and limited to a few files. Auth, payments, secrets, real-data migrations and deploy config never leave the lead. More in the [reference](docs/reference.md#when-to-delegate).
+## Does it save anything?
+
+Honest answer so far: **not for small and mid-size tasks.** A 10-run A/B benchmark (5 real tasks of 50 to 500 lines, each run twice from the same commit, Claude Opus as lead) found the lead cost **more** with crewtier in every run: median 123% in dollars, and 2 to 5 times slower. The gap narrowed as tasks grew (small 176%, mid 129%, large 121%).
+
+The reason: delegating cuts the lead's output, but each extra turn re-reads the whole conversation, and that cost more than it saved. That run used the old multi-step flow. crewtier now delegates in one call (`crewtier do`), the skill tells the lead to keep small work to itself (under about 300 lines), and the skill text the lead carries is a quarter of its old size. Those changes haven't been benchmarked yet.
+
+Measure it on your own work with `crewtier bench` (same task done twice, lead alone vs with crewtier: lead tokens, turns and dollars) and `crewtier session` (where the current conversation's cost went). Where it can still help regardless of cost: when your main agent's plan keeps hitting its limit while your other plans have quota to spare.
 
 ## Changing things later
 

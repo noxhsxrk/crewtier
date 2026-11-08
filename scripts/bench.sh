@@ -44,14 +44,15 @@ cd "$root"
 id="$(date +%Y%m%d-%H%M%S)"; base="$(git rev-parse --short HEAD)"
 bdir="$root/.crewtier/bench/$id"; mkdir -p "$bdir"
 state="$HOME/.crewtier"; mkdir -p "$state"; tsv="$state/bench.tsv"
-[[ -f "$tsv" ]] || printf 'date\trepo\tcommit\tlead\tmode\tin\tout\tcache_write\tcache_read\tcost_units\tseconds\ttest\tdiff_lines\tcrewtier_tasks\ttask\n' >"$tsv"
+[[ -f "$tsv" ]] || printf 'date\trepo\tcommit\tlead\tmode\tin\tout\tcache_write\tcache_read\tcost_units\tseconds\ttest\tdiff_lines\tcrewtier_tasks\ttask\tturns\tusd\n' >"$tsv"
 
 lead_run() {  # $1 dir  $2 prompt  -> prints usage JSON {in,out,cw,cr}; raw output saved next to it
   local d="$1" p="$2" raw="$1.lead.out"
   if [[ "$lead" == claude ]]; then
     # shellcheck disable=SC2086
     ( cd "$d" && CREWTIER_LEAD=claude claude -p "$p" --output-format json ${CREWTIER_BENCH_CLAUDE_FLAGS:---permission-mode bypassPermissions} ) >"$raw" 2>"$raw.err"
-    jq -c '(.usage // {}) | {in:(.input_tokens//0), out:(.output_tokens//0), cw:(.cache_creation_input_tokens//0), cr:(.cache_read_input_tokens//0)}' "$raw" 2>/dev/null \
+    jq -c '{in:(.usage.input_tokens//0), out:(.usage.output_tokens//0), cw:(.usage.cache_creation_input_tokens//0), cr:(.usage.cache_read_input_tokens//0),
+            turns:(.num_turns // null), usd:(.total_cost_usd // null)}' "$raw" 2>/dev/null \
       || echo '{"in":0,"out":0,"cw":0,"cr":0}'
   else
     # shellcheck disable=SC2086
@@ -60,7 +61,7 @@ lead_run() {  # $1 dir  $2 prompt  -> prints usage JSON {in,out,cw,cr}; raw outp
     jq -cs '
       ([ .[] | (.usage? // empty) ] ) as $u
       | if ($u|length) > 0 then
-          {in: ([$u[].input_tokens // 0]|add) - ([$u[].cached_input_tokens // 0]|add), out: ([$u[].output_tokens // 0]|add), cw: 0, cr: ([$u[].cached_input_tokens // 0]|add)}
+          {in: ([$u[].input_tokens // 0]|add) - ([$u[].cached_input_tokens // 0]|add), out: ([$u[].output_tokens // 0]|add), cw: 0, cr: ([$u[].cached_input_tokens // 0]|add), turns: ($u|length)}
         else
           ([ .[] | (.msg.info.total_token_usage? // .payload.info.total_token_usage? // empty) ] | last // {}) as $t
           | {in: (($t.input_tokens // 0) - ($t.cached_input_tokens // 0)), out: ($t.output_tokens // 0), cw: 0, cr: ($t.cached_input_tokens // 0)}
@@ -79,28 +80,39 @@ Do this task yourself. Do not use crewtier and do not delegate to other agents. 
   else
     p="$taskp
 
-Use the crewtier skill for this: plan it, route the implementation to worker agents with \`CREWTIER_LEAD=$lead crewtier run\`, review each result, and finish the task. Do not commit."
+Use the crewtier skill for this (read its SKILL.md and follow it). Do not commit."
   fi
   echo "… $mode run ($lead as lead)" >&2
   t0=$(date +%s); u="$(lead_run "$d" "$p")"; secs=$(( $(date +%s) - t0 ))
   if [[ -n "$test_cmd" ]]; then ( cd "$d" && bash -c "$test_cmd" ) >"$d.test.out" 2>&1 && tres=PASS || tres=FAIL; fi
   lines="$(cd "$d" && git add -A -N . 2>/dev/null; git diff HEAD --numstat -- . ':(exclude).crewtier' ':(exclude)node_modules' | awk '{a+=$1+$2} END{print a+0}')"
-  tasks="$(ls "$d/.crewtier/logs" 2>/dev/null | sed 's/-[^-]*\.log$//' | sort -u | wc -l | tr -d ' ')"
+  tasks="$(ls "$d"/.crewtier/results/*.json 2>/dev/null | wc -l | tr -d ' ')"   # one result per delegated task
   cu="$(jq -r '(.in + 5*.out + 1.25*.cw + 0.1*.cr) | floor' <<<"$u")"
+  turns="$(jq -r '.turns // "-"' <<<"$u")"
+  # dollars: Claude Code reports its own cost; otherwise CREWTIER_PRICE="in,out,cache_write,cache_read" (USD per 1M tokens)
+  usd="$(jq -r '.usd // empty | . * 10000 | round / 10000' <<<"$u" 2>/dev/null)"
+  if [[ -z "$usd" && -n "${CREWTIER_PRICE:-}" ]]; then
+    usd="$(jq -r --arg p "$CREWTIER_PRICE" '($p | split(",") | map(tonumber)) as $r | ((.in*$r[0] + .out*$r[1] + .cw*$r[2] + .cr*$r[3]) / 1000000 * 10000 | round / 10000)' <<<"$u")"
+  fi
+  usd="${usd:--}"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%F)" "$(basename "$root")" "$base" "$lead" "$mode" \
     "$(jq -r '[.in,.out,.cw,.cr]|@tsv' <<<"$u")" "$cu" "$secs" >"$d.row"
-  printf '\t%s\t%s\t%s\t%s\n' "$tres" "$lines" "$tasks" "$(head -c 80 <<<"$taskp" | tr '\t\n' '  ')" >>"$d.row"
+  printf '\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tres" "$lines" "$tasks" "$(head -c 80 <<<"$taskp" | tr '\t\n' '  ')" "$turns" "$usd" >>"$d.row"
   tr -d '\n' <"$d.row" >>"$tsv"; echo >>"$tsv"
-  printf '%-9s %9s %9s %10s %11s %7ss %6s %6s %5s\n' "$mode" \
-    "$(jq -r .in <<<"$u")" "$(jq -r .out <<<"$u")" "$(jq -r .cr <<<"$u")" "$cu" "$secs" "$tres" "$lines" "$tasks"
-  echo "$cu" >"$d.cu"
+  printf '%-9s %9s %9s %10s %11s %7ss %6s %6s %5s %5s %8s\n' "$mode" \
+    "$(jq -r .in <<<"$u")" "$(jq -r .out <<<"$u")" "$(jq -r .cr <<<"$u")" "$cu" "$secs" "$tres" "$lines" "$tasks" "$turns" "$usd"
+  echo "$cu" >"$d.cu"; echo "$usd" >"$d.usd"
 }
 
-printf '%-9s %9s %9s %10s %11s %8s %6s %6s %5s\n' RUN LEAD_IN LEAD_OUT CACHE_READ COST_UNITS TIME TEST DIFF TASKS
+printf '%-9s %9s %9s %10s %11s %8s %6s %6s %5s %5s %8s\n' RUN LEAD_IN LEAD_OUT CACHE_READ COST_UNITS TIME TEST DIFF TASKS TURNS USD
 one self; one crewtier
 a="$(cat "$bdir/self.cu" 2>/dev/null || echo 0)"; b="$(cat "$bdir/crewtier.cu" 2>/dev/null || echo 0)"
 if [[ "$a" -gt 0 ]]; then
-  echo "lead cost with crewtier: $(( (b * 100) / a ))% of doing it alone"
+  echo "lead cost with crewtier: $(( (b * 100) / a ))% of doing it alone (cost units)"
+fi
+ua="$(cat "$bdir/self.usd" 2>/dev/null)"; ub="$(cat "$bdir/crewtier.usd" 2>/dev/null)"
+if [[ "$ua" != "-" && -n "$ua" && "$ub" != "-" && -n "$ub" ]]; then
+  echo "in dollars: \$$ua alone vs \$$ub with crewtier ($(jq -nr --argjson a "$ua" --argjson b "$ub" 'if $a > 0 then ($b / $a * 100 | floor | tostring) + "%" else "-" end'))"
 fi
 echo "(worker usage is billed to each worker's own plan and isn't counted here; results appended to ${tsv/#$HOME/~})"
 if [[ $keep == 0 ]]; then

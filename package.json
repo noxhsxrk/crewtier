@@ -29,6 +29,7 @@
     "bin/",
     "scripts/",
     "SKILL.md",
+    "REFERENCE.md",
     "routing.example.json",
     "install.sh",
     "README.md",

@@ -85,7 +85,7 @@ task_section() {  # "## T1 ..." up to the next "## "
 }
 if [[ -z "$fixmsg" ]]; then
   if [[ -n "$spec" ]]; then
-    if [[ "$spec" == "-" ]]; then cat >"$brief"; else cp "$spec" "$brief"; fi
+    if [[ "$spec" == "-" ]]; then cat >"$brief"; elif [[ ! "$spec" -ef "$brief" ]]; then cp "$spec" "$brief"; fi
   else
     [[ -f "$plan" ]] || { echo "no $plan (or pass --spec FILE)"; exit 2; }
     ts="$(task_section)"; [[ -n "$ts" ]] || { echo "task $task not found in $plan"; exit 2; }
@@ -317,6 +317,7 @@ echo "log: $log · result: $dir/results/$task.json"
 # ---- automatic escalation (opt-in) ---------------------------------------------------------------
 if [[ $auto == 1 && ( "$rstatus" == verify-failed || "$rstatus" == no-changes ) ]]; then
   pass=(); [[ $isolated == 1 ]] && pass+=(--isolated); [[ $readonly_ == 1 ]] && pass+=(--read-only)
+  [[ -n "$spec" ]] && pass+=(--spec "$brief")   # the brief came from --spec, not plan.md: keep using it
   [[ -n "$verify" ]] && pass+=(--verify "$verify"); [[ $no_verify == 1 ]] && pass+=(--no-verify)
   [[ -n "${CREWTIER_BASE_CLEAN:-}" ]] || { [[ -z "$dirty0" || -n "$fixmsg" ]] && export CREWTIER_BASE_CLEAN=1 || export CREWTIER_BASE_CLEAN=0; }
   if [[ $round == 0 && "$rstatus" == verify-failed ]]; then

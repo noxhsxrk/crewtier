@@ -71,6 +71,7 @@ ${c_bold}Install${c_off}
       --dry-run                    show what would change
       --skip-login                 don't run the sign-in check first
   crewtier login [agent…]      sign-in check: list agents, sign in to more, repeat until you're done
+  crewtier do <tier> --spec F [--commit "msg"]   delegate one task in one call: run, check, escalate, commit
   crewtier update               update crewtier to the latest release
   crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
   crewtier routing [add|remove|first|edit]   show or change which worker/model each tier uses
@@ -174,7 +175,7 @@ rules_text() {  # $1 names (space separated)  $2 path to SKILL.md as the agent s
   fi
   cat <<EOF
 ## crewtier
-$who When asked to build, implement, fix or refactor code in a git repo, use the crewtier skill: read \`$skill\` and follow it. At the start of each session where you will route work, run \`${prefix}crewtier health\` and tell the user in one line about any worker that is signed out or out of credit. Plan and review yourself; send the typing to other coding agents with \`${prefix}crewtier run\` (or the scripts next to that SKILL.md if the command isn't installed). Do it yourself when the change is ~20 lines or less, or the work is mostly design, debugging or security. To start, the user can ask "which agents do I have?" or "set up crewtier".
+$who For a big, already-decided coding task (about 300+ changed lines, checkable by a command) you can hand the typing to another coding agent: read \`$skill\` and use \`${prefix}crewtier do\`. For anything smaller, work as usual and don't load crewtier.
 EOF
 }
 
@@ -924,6 +925,7 @@ case "${1:-help}" in
   disable)     shift; [[ $# -gt 0 ]] || { say "usage: crewtier disable <agent…>"; exit 2; }; set_worker off "$@" ;;
   enable)      shift; [[ $# -gt 0 ]] || { say "usage: crewtier enable <agent…>"; exit 2; }; set_worker on "$@" ;;
   run)         shift; exec bash "$S/worker.sh" "$@" ;;
+  do)          shift; exec bash "$S/do.sh" "$@" ;;
   run-many)    shift; cmd_run_many "$@" ;;
   apply)       shift; cmd_apply "${1:?usage: crewtier apply <task>}" ;;
   discard)     shift; cmd_discard "${1:?usage: crewtier discard <task>}" ;;
