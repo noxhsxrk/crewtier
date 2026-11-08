@@ -493,6 +493,19 @@ cmd_update() {
     exit 1
   fi
   ok "updated to $now"
+  # user-scope skills: links should point at the app (re-point any that point at an old checkout),
+  # copies made with --copy don't follow the app, so refresh them
+  local sc base kind path fixed=0
+  while IFS='|' read -r sc base kind path _; do
+    [[ "$sc" == user && "$kind" == skill && -n "$path" ]] || continue
+    if [[ -L "$path" ]]; then
+      [[ "$(cd -P "$path" 2>/dev/null && pwd)" == "$(cd -P "$APP" && pwd)" ]] && continue
+      rm -f "$path" && ln -s "$APP" "$path" && fixed=$((fixed + 1))
+    elif [[ -d "$path" && -f "$path/SKILL.md" ]]; then
+      rm -rf "$path" && cp -R "$APP" "$path" && rm -rf "$path/.git" && fixed=$((fixed + 1))
+    fi
+  done <"$MANIFEST" 2>/dev/null
+  [[ $fixed -gt 0 ]] && ok "refreshed $fixed skill install(s) that didn't follow the app"
   # skills installed per repo (project scope) are copies: they don't follow the app
   local repos; repos="$(awk -F'|' '$1=="project"{print $2}' "$MANIFEST" 2>/dev/null | sort -u)"
   if [[ -n "$repos" ]]; then
