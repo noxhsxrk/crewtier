@@ -109,16 +109,19 @@ EOF
 
 ## Does it save anything?
 
-It depends on task size, and we publish the numbers either way. All runs: `crewtier bench`, same task from the same commit done twice (lead alone vs with crewtier), Claude Opus as lead, real tasks from a Roblox project. Worker costs are not included: they come out of the workers' own plans.
+Measured with `crewtier bench`: the same real task done twice from the same commit, once by the lead alone and once with crewtier, Claude Opus as lead.
 
-| Round | crewtier version | Large task (~500 lines) | Mid (~130–200) | Small (~50) |
-|---|---|---|---|---|
-| 1 (10 runs) | before `crewtier do` | 104–111% of alone, in dollars | 112–124% | 164–194% |
-| 2 (5 runs) | 0.1.10, with `crewtier do` | **60–66%** | 100–103% (lead did it itself) | 114% (lead did it itself) |
+| Task size | Lead's cost with crewtier |
+|---|---|
+| Large (~500 lines) | **34–40% less** than doing it alone |
+| Mid (~130–200 lines) | about the same (0–3% more): the lead does these itself |
+| Small (~50 lines) | about the same (up to 14% more): the lead does these itself |
 
-What changed between the rounds: delegating became one call (`crewtier do`), the skill tells the lead to keep anything under ~300 lines to itself, and the skill text is a quarter of its old size. The large task flipped to cheaper even though a bug (since fixed) made the lead re-check the worker's result by hand. Still true: delegated tasks are slower (about 3 times here), and two runs per task is a small sample.
+- Savings come from large, well-specified tasks. For anything smaller the lead works as usual, so crewtier adds almost nothing.
+- Worker usage isn't in these numbers: it comes out of the workers' own plans.
+- Delegated tasks take longer (about 3 times here), and the sample is small (two runs per task).
 
-Measure it on your own work with `crewtier bench` (lead tokens, turns and dollars for both sides, plus both diffs) and `crewtier session` (where the current conversation's cost went).
+Check it on your own work with `crewtier bench` and `crewtier session`.
 
 ## Changing things later
 
