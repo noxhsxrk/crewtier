@@ -81,6 +81,8 @@ run_fallback() {
     # shellcheck disable=SC2086
     $fn $fs >"$f" 2>&1; c=$?
     if [[ $c -eq 2 ]] && grep -qiE 'unexpected argument|unknown (flag|option)|flag provided but not defined|unrecognized (option|argument)|invalid (option|flag)|usage:' "$f"; then continue; fi
+    # some CLIs stop on a permission prompt they can't show in print mode: try the next, looser flag set
+    if [[ -n "${CREWTIER_RETRY_ON_PERMISSION:-}" ]] && grep -qiE 'permission (denied|required|request)|requires? (approval|permission)|not (allowed|permitted) (in|without)|approve this|waiting for (approval|permission)' "$f"; then continue; fi
     break
   done
   cat "$f"; rm -f "$f"; return $c
@@ -138,8 +140,10 @@ run_one() {
       local variants=()
       [[ -n "$m" ]] && mflag=(--model "$m")
       if [[ "${CREWTIER_READONLY:-}" == 1 ]]; then variants=("--mode plan" "--sandbox")
-      else variants=("--mode accept-edits" "--dangerously-skip-permissions" ""); fi
-      run_fallback _agy_print "${variants[@]}" ;;
+      # accept-edits only approves file edits; shell commands (tests, builds) still wait for a yes that
+      # never comes in print mode. Skip permission prompts entirely, like the other workers do.
+      else variants=("--mode accept-edits --dangerously-skip-permissions" "--dangerously-skip-permissions" "--mode auto"); fi
+      CREWTIER_RETRY_ON_PERMISSION=1 run_fallback _agy_print "${variants[@]}" ;;
     muse)     # no reliable resume: the fix prompt is self-contained
       local variants=()
       [[ -n "$m" ]] && mflag=(--model "$m")
