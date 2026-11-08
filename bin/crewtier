@@ -73,6 +73,7 @@ ${c_bold}Install${c_off}
   crewtier login [agent…]      sign-in check: list agents, sign in to more, repeat until you're done
   crewtier do <tier> --spec F [--commit "msg"]   delegate one task in one call: run, check, escalate, commit
   crewtier update               update crewtier to the latest release
+  crewtier refresh              rewrite skill links and the rules in agent rules files for this version
   crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
   crewtier routing [add|remove|first|edit]   show or change which worker/model each tier uses
   crewtier agents add <bin>    use another agent CLI as a worker
@@ -175,7 +176,8 @@ rules_text() {  # $1 names (space separated)  $2 path to SKILL.md as the agent s
   fi
   cat <<EOF
 ## crewtier
-$who For a big, already-decided coding task (about 300+ changed lines, checkable by a command) you can hand the typing to another coding agent: read \`$skill\` and use \`${prefix}crewtier do\`. For anything smaller, work as usual and don't load crewtier.
+$who Do coding work yourself unless a task is big (about 300+ changed lines), already decided, and checkable by a command. For those, hand the typing to another coding agent in one call, and wait for it (long shell timeout, don't poll):
+\`${prefix}crewtier do <t1-easy|t2-normal|t3-hard> --spec <spec file> --commit "<message>"\` (or pipe the spec in). The spec ends with \`Done when: <command>\`. On PASS, report it and move on without reviewing the diff. Read \`$skill\` only to set up workers or when \`do\` fails.
 EOF
 }
 
@@ -473,6 +475,40 @@ cmd_setup() {
   say "${c_dim}Run  crewtier setup  any time to change these.${c_off}"
 }
 
+# --- refresh: re-point skill links, refresh --copy installs and rules text to this version ---
+cmd_refresh() {
+  # user-scope skills: links should point at the app (re-point any that point at an old checkout),
+  # copies made with --copy don't follow the app, so refresh them
+  local sc base kind path fixed=0
+  while IFS='|' read -r sc base kind path _; do
+    [[ "$sc" == user && "$kind" == skill && -n "$path" ]] || continue
+    if [[ -L "$path" ]]; then
+      [[ "$(cd -P "$path" 2>/dev/null && pwd)" == "$(cd -P "$APP" && pwd)" ]] && continue
+      rm -f "$path" && ln -s "$APP" "$path" && fixed=$((fixed + 1))
+    elif [[ -d "$path" && -f "$path/SKILL.md" ]]; then
+      rm -rf "$path" && cp -R "$APP" "$path" && rm -rf "$path/.git" && fixed=$((fixed + 1))
+    fi
+  done <"$MANIFEST" 2>/dev/null
+  [[ $fixed -gt 0 ]] && ok "refreshed $fixed skill install(s) that didn't follow the app"
+  # rules blocks in agent rules files: rewrite them with this version's text (keeps the skill path they point to)
+  local rf=0 f names skillref
+  while IFS='|' read -r sc base kind f names; do
+    [[ "$kind" == block || "$kind" == file ]] || continue
+    [[ -f "$f" ]] || continue
+    skillref="$(grep -o '[^` ]*SKILL\.md' "$f" 2>/dev/null | head -1)"; [[ -n "$skillref" ]] || skillref="$APP/SKILL.md"
+    if [[ "$kind" == file ]]; then
+      { [[ "$f" == *.mdc ]] && printf -- '---\ndescription: crewtier lead rules\nalwaysApply: true\n---\n\n'; rules_text "$names" "$skillref"; } >"$f"
+    else
+      grep -qF "$MARK_START" "$f" || continue
+      strip_block "$f"
+      { [[ -s "$f" ]] && echo; echo "$MARK_START"; rules_text "$names" "$skillref"; echo "$MARK_END"; } >>"$f"
+    fi
+    rf=$((rf + 1))
+  done < <(sort -u "$MANIFEST" 2>/dev/null)
+  [[ $rf -gt 0 ]] && ok "updated the crewtier rules in $rf agent rules file(s)"
+  return 0
+}
+
 # --- update: fetch the latest release and reinstall the app ---------------------------------
 cmd_update() {
   local pkg="@noxhsxrk/crewtier" latest runner=()
@@ -494,19 +530,9 @@ cmd_update() {
     exit 1
   fi
   ok "updated to $now"
-  # user-scope skills: links should point at the app (re-point any that point at an old checkout),
-  # copies made with --copy don't follow the app, so refresh them
-  local sc base kind path fixed=0
-  while IFS='|' read -r sc base kind path _; do
-    [[ "$sc" == user && "$kind" == skill && -n "$path" ]] || continue
-    if [[ -L "$path" ]]; then
-      [[ "$(cd -P "$path" 2>/dev/null && pwd)" == "$(cd -P "$APP" && pwd)" ]] && continue
-      rm -f "$path" && ln -s "$APP" "$path" && fixed=$((fixed + 1))
-    elif [[ -d "$path" && -f "$path/SKILL.md" ]]; then
-      rm -rf "$path" && cp -R "$APP" "$path" && rm -rf "$path/.git" && fixed=$((fixed + 1))
-    fi
-  done <"$MANIFEST" 2>/dev/null
-  [[ $fixed -gt 0 ]] && ok "refreshed $fixed skill install(s) that didn't follow the app"
+  # let the NEW version refresh skill links and rules text (this running copy may be the old one)
+  "$APP/bin/crewtier" refresh
+
   # skills installed per repo (project scope) are copies: they don't follow the app
   local repos; repos="$(awk -F'|' '$1=="project"{print $2}' "$MANIFEST" 2>/dev/null | sort -u)"
   if [[ -n "$repos" ]]; then
@@ -906,6 +932,7 @@ case "${1:-help}" in
                cmd_init "$@" ;;
   self-install) install_app ;;
   update|upgrade) cmd_update ;;
+  refresh)     cmd_refresh ;;
   leads)       shift; cmd_leads "$@" ;;
   prompt)      shift; rules_text "${1:?usage: crewtier prompt <lead>}" "$ROOT/SKILL.md" ;;
   status)      cmd_status ;;

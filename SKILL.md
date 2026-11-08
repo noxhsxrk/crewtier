@@ -15,7 +15,7 @@ Your cost has two parts: **output** (code you type, the priciest tokens) and **r
 2. **One turn per delegated task.** Use `crewtier do` (below). Don't call `health`, `meter`, `run` or `apply` separately, and don't write a plan file for a single task.
 3. **Don't read code to write the spec.** If the user or a task file already describes the work, pass it as is. The worker explores the code at its own cost. Read code yourself only for a real design decision.
 4. **Don't review a pass.** When `do` prints `PASS`, take it: no `git diff`, no opening the files. Look only when it fails.
-5. **Keep your context small.** Search, then read only the lines you need. Never `cat` big files, lockfiles, or logs; redirect long command output to a file and read its tail. Screenshots and other images are the heaviest thing you can add: take one only when you must see something, not to confirm every small change. Send "where is X / list every caller of Y" questions to a worker with `crewtier run <id> t1-easy --read-only --spec -`.
+5. **Keep your context small.** Read a file of up to ~400 lines in one go rather than in slices over several turns; for bigger files, search first and read only the part you need. Never `cat` big files, lockfiles, or logs; redirect long command output to a file and read its tail. Screenshots and other images are the heaviest thing you can add: take one only when you must see something, not to confirm every small change. Send "where is X / list every caller of Y" questions to a worker with `crewtier run <id> t1-easy --read-only --spec -`.
 6. **Start fresh per feature.** After a feature is committed in a long conversation, tell the user once that a new session for the next feature costs much less. Everything crewtier keeps carries over.
 
 ## Delegating a task
@@ -23,9 +23,15 @@ Your cost has two parts: **output** (code you type, the priciest tokens) and **r
 Call it once and wait for it to finish. It can take several minutes, so give the shell call a long timeout (in Claude Code, `timeout: 600000`). Don't run it in the background and check on it: each check is another full re-read of your context. Budget: reading this skill once plus one `do` call per task. A benchmark lead doing the same tasks itself needed 3 to 11 turns, so every extra turn you spend on delegation eats the saving.
 
 ```bash
+CREWTIER_LEAD=<lead> crewtier do t2-normal --spec path/to/spec.md --commit "Add crumbling platforms"
+```
+
+If the spec already exists in a file, pass its path; don't retype it (that's paid output). Otherwise pipe it in:
+
+```bash
 CREWTIER_LEAD=<lead> crewtier do t2-normal --commit "Add crumbling platforms" <<'EOF'
 <what to build, which files, constraints>
-Done when: <command that proves it, e.g. pnpm test>
+Done when: `<command that proves it, e.g. pnpm test>`
 EOF
 ```
 
@@ -33,7 +39,9 @@ EOF
 - Tiers: `t1-easy` (boilerplate, tests, docs), `t2-normal` (a feature across a few files), `t3-hard` (tricky logic, cross-module refactors).
 - `do` saves the spec, runs the first ready worker in the tier, checks it, gives a failing worker one fix round, moves up a tier if it still fails, meters your tokens, and commits on success (only if the tree was clean).
 - Success is one line: `D1 PASS codex/gpt-6.1-sol · 412 lines (5 files) · 3m10s · commit abc123`. Report it to the user in a sentence and move on.
-- Failure prints the last tier tried, the check's output, and saved attempts as patches. Exit 3 means no worker was available. Then do the task yourself; don't send it again.
+- `VERIFY-ERROR` means the check command itself didn't run (typo, missing tool). The worker's changes are in the tree: fix the command and run it once. Don't review the code.
+- Any other failure prints the last tier tried and the check's output, and leaves the last attempt in the tree. Exit 3 means no worker was available. Then finish the task yourself; don't send it again.
+- No `crewtier health` or other setup calls first: `do` checks the workers itself.
 
 ## When you need more
 

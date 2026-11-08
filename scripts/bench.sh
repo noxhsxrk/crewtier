@@ -27,9 +27,14 @@ while [[ $# -gt 0 ]]; do
     --clean)  # remove worktrees kept by earlier --keep runs
       r="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not in a git repo"; exit 2; }
       n=0; for d in "$r"/.crewtier/bench/*/self "$r"/.crewtier/bench/*/crewtier; do
-        [[ -d "$d" ]] || continue; git -C "$r" worktree remove --force "$d" 2>/dev/null && n=$((n + 1))
+        [[ -d "$d" ]] || continue
+        ( cd "$d" && git add -A -N . 2>/dev/null; git diff HEAD -- . ':(exclude).crewtier' ) >"$d.diff" 2>/dev/null
+        git -C "$r" worktree remove --force "$d" 2>/dev/null && n=$((n + 1))
       done
-      git -C "$r" worktree prune 2>/dev/null; echo "removed $n bench worktree(s)"; exit 0 ;;
+      git -C "$r" worktree prune 2>/dev/null
+      m=$(ls -d "$r"/.crewtier/bench/*/ 2>/dev/null | wc -l | tr -d ' ')
+      echo "removed $n bench worktree(s); kept $m run folder(s) in .crewtier/bench/ with each run's diff, numbers and lead output"
+      echo "(delete those too: rm -rf .crewtier/bench)"; exit 0 ;;
     *) echo "unknown option $1"; exit 2 ;;
   esac
 done
@@ -52,7 +57,8 @@ lead_run() {  # $1 dir  $2 prompt  -> prints usage JSON {in,out,cw,cr}; raw outp
     # shellcheck disable=SC2086
     ( cd "$d" && CREWTIER_LEAD=claude claude -p "$p" --output-format json ${CREWTIER_BENCH_CLAUDE_FLAGS:---permission-mode bypassPermissions} ) >"$raw" 2>"$raw.err"
     jq -c '{in:(.usage.input_tokens//0), out:(.usage.output_tokens//0), cw:(.usage.cache_creation_input_tokens//0), cr:(.usage.cache_read_input_tokens//0),
-            turns:(.num_turns // null), usd:(.total_cost_usd // null)}' "$raw" 2>/dev/null \
+            turns:(.num_turns // null), usd:(.total_cost_usd // null),
+            usd_lead:((.modelUsage // {}) | to_entries | if length > 0 then (max_by(.value.outputTokens // 0) | .value.costUSD // null) else null end)}' "$raw" 2>/dev/null \
       || echo '{"in":0,"out":0,"cw":0,"cr":0}'
   else
     # shellcheck disable=SC2086
@@ -91,6 +97,13 @@ Use the crewtier skill for this (read its SKILL.md and follow it). Do not commit
   turns="$(jq -r '.turns // "-"' <<<"$u")"
   # dollars: Claude Code reports its own cost; otherwise CREWTIER_PRICE="in,out,cache_write,cache_read" (USD per 1M tokens)
   usd="$(jq -r '.usd // empty | . * 10000 | round / 10000' <<<"$u" 2>/dev/null)"
+  usd_lead="$(jq -r '.usd_lead // empty | . * 10000 | round / 10000' <<<"$u" 2>/dev/null)"
+  # other models (advisor, subagents) billed in the same run are reported, but the comparison uses the lead's own cost
+  if [[ -n "$usd_lead" && -n "$usd" ]]; then
+    other="$(jq -nr --argjson a "$usd" --argjson b "$usd_lead" '($a - $b) * 10000 | round / 10000')"
+    [[ "$other" != 0 ]] && echo "  ($mode: \$$other of this run went to other models, e.g. an advisor or subagents; not counted below)" >&2
+    usd="$usd_lead"
+  fi
   if [[ -z "$usd" && -n "${CREWTIER_PRICE:-}" ]]; then
     usd="$(jq -r --arg p "$CREWTIER_PRICE" '($p | split(",") | map(tonumber)) as $r | ((.in*$r[0] + .out*$r[1] + .cw*$r[2] + .cr*$r[3]) / 1000000 * 10000 | round / 10000)' <<<"$u")"
   fi
@@ -115,6 +128,10 @@ if [[ "$ua" != "-" && -n "$ua" && "$ub" != "-" && -n "$ub" ]]; then
   echo "in dollars: \$$ua alone vs \$$ub with crewtier ($(jq -nr --argjson a "$ua" --argjson b "$ub" 'if $a > 0 then ($b / $a * 100 | floor | tostring) + "%" else "-" end'))"
 fi
 echo "(worker usage is billed to each worker's own plan and isn't counted here; results appended to ${tsv/#$HOME/~})"
+for m in self crewtier; do   # keep each side's diff, so the two results can be compared after the worktrees go
+  ( cd "$bdir/$m" 2>/dev/null && git add -A -N . 2>/dev/null; git diff HEAD -- . ':(exclude).crewtier' ':(exclude)node_modules' ) >"$bdir/$m.diff" 2>/dev/null
+done
+echo "diffs: ${bdir#$root/}/self.diff · ${bdir#$root/}/crewtier.diff"
 if [[ $keep == 0 ]]; then
   git worktree remove --force "$bdir/self" 2>/dev/null; git worktree remove --force "$bdir/crewtier" 2>/dev/null
 else

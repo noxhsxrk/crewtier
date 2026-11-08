@@ -94,7 +94,13 @@ if [[ -z "$fixmsg" ]]; then
   fi
 fi
 if [[ -z "$verify" && $no_verify == 0 && -f "$brief" ]]; then
-  verify="$(grep -iE '^[[:space:]]*(done when|verify)[[:space:]]*:' "$brief" | head -1 | sed -E 's/^[^:]*:[[:space:]]*//; s/^`+//; s/`+[[:space:]]*$//')"
+  vline="$(grep -iE '^[[:space:]]*(done when|verify)[[:space:]]*:' "$brief" | head -1 | sed -E 's/^[^:]*:[[:space:]]*//')"
+  if [[ "$vline" == *'`'*'`'* ]]; then
+    # "Done when: `pnpm test` passes" -> run only what's inside the first pair of backticks
+    verify="$(printf '%s' "$vline" | sed -E 's/^[^`]*`+([^`]*)`.*$/\1/')"
+  else
+    verify="$vline"
+  fi
   # only run it if it looks like a command, not prose
   [[ "$verify" =~ ^[A-Za-z0-9_./-]+([[:space:]]|$) ]] && command -v "${verify%% *}" >/dev/null 2>&1 || verify=""
 fi
@@ -275,6 +281,11 @@ if [[ $code -eq 0 && -n "$verify" ]]; then
   ( cd "$work" && ${VTO[@]+"${VTO[@]}"} bash -c "$verify" ) >"$tasks/$task.verify.raw" 2>&1; vcode=$?
   strip_ansi <"$tasks/$task.verify.raw" >"$tasks/$task.verify.txt"; rm -f "$tasks/$task.verify.raw"
   if [[ "$vcode" == 0 ]]; then vres="PASS"; : >"$tasks/$task.verify.txt"
+  elif [[ "$vcode" == 127 || ( "$vcode" == 2 && -n "$(grep -iE 'syntax error|unexpected (EOF|token)|unterminated|command not found' "$tasks/$task.verify.txt")" ) ]]; then
+    # the check command itself is broken: that says nothing about the worker's code
+    vres="ERROR (exit $vcode)"
+    { echo "command: $verify"; cat "$tasks/$task.verify.txt"; } >"$tasks/$task.verify.tmp" && mv "$tasks/$task.verify.tmp" "$tasks/$task.verify.txt"
+    vtail="$(grep -v '^\s*$' "$tasks/$task.verify.txt" | tail -8)"
   else
     vres="FAIL (exit $vcode)"
     [[ -s "$tasks/$task.verify.txt" ]] || echo "\`$verify\` exited $vcode with no output" >"$tasks/$task.verify.txt"
@@ -291,6 +302,7 @@ patch=""; [[ $isolated == 1 ]] && patch="$dir/patches/$task.patch"
 status="done"; rstatus="done"
 if [[ $code -eq 124 || $code -eq 137 ]]; then status="TIMED OUT after ${tmo}s"; rstatus="timed-out"
 elif [[ $code -ne 0 ]]; then status="worker failed (exit $code)"; rstatus="worker-failed"
+elif [[ "$vres" == ERROR* ]]; then status="VERIFY-ERROR — the check command is broken, the worker's changes are kept"; rstatus="verify-error"
 elif [[ "$vres" == FAIL* ]]; then status="verify failed"; rstatus="verify-failed"
 elif [[ -z "$files" && $readonly_ == 0 && -z "$fixmsg" ]]; then status="NO CHANGES — the worker reported back but changed nothing"; rstatus="no-changes"
 fi
@@ -336,7 +348,9 @@ if [[ $auto == 1 && ( "$rstatus" == verify-failed || "$rstatus" == no-changes ) 
       rm -f "$last" "$last.session" "$last.usage"
       exec bash "$0" "$task" "$next" --auto-escalate --round 0 ${pass[@]+"${pass[@]}"}
     fi
-    echo "↑ auto-escalate: $task failed in $tier — back to the lead (attempts are in $dir/patches/)"
+    # last tier: put the final attempt back in the tree, so the lead can fix it instead of hunting for patches
+    ( cd "$work" && git apply --whitespace=nowarn "$pf" 2>/dev/null ) && echo "  last attempt left in the tree (also saved as $pf)"
+    echo "↑ auto-escalate: $task failed in $tier — back to the lead (earlier attempts are in $dir/patches/)"
   else
     echo "↑ auto-escalate stopped: the tree wasn't clean before $task, so it can't be reset safely"
   fi

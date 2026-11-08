@@ -96,6 +96,12 @@ if [[ "$st" == done ]]; then
   echo "$line"; exit 0
 fi
 
+if [[ "$st" == verify-error ]]; then
+  echo "$task VERIFY-ERROR: the check command didn't run ($wk/$md's changes are in the tree, not checked) · $mins"
+  echo "fix the command and run it once; no need to review the code:"
+  grep -v '^\s*$' "$dir/tasks/$task.verify.txt" 2>/dev/null | head -6 | sed 's/^/  | /'
+  exit 1
+fi
 echo "$task $st (last tier: $ft, last worker: $wk/$md) · $mins"
 vt="$dir/tasks/$task.verify.txt"
 [[ -s "$vt" ]] && { echo "verify output (last 20 lines):"; grep -v '^\s*$' "$vt" | tail -20 | sed 's/^/  | /'; }

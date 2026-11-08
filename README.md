@@ -109,11 +109,16 @@ EOF
 
 ## Does it save anything?
 
-Honest answer so far: **not for small and mid-size tasks.** A 10-run A/B benchmark (5 real tasks of 50 to 500 lines, each run twice from the same commit, Claude Opus as lead) found the lead cost **more** with crewtier in every run: median 123% in dollars, and 2 to 5 times slower. The gap narrowed as tasks grew (small 176%, mid 129%, large 121%).
+It depends on task size, and we publish the numbers either way. All runs: `crewtier bench`, same task from the same commit done twice (lead alone vs with crewtier), Claude Opus as lead, real tasks from a Roblox project. Worker costs are not included: they come out of the workers' own plans.
 
-The reason: delegating cuts the lead's output, but each extra turn re-reads the whole conversation, and that cost more than it saved. That run used the old multi-step flow. crewtier now delegates in one call (`crewtier do`), the skill tells the lead to keep small work to itself (under about 300 lines), and the skill text the lead carries is a quarter of its old size. Those changes haven't been benchmarked yet.
+| Round | crewtier version | Large task (~500 lines) | Mid (~130–200) | Small (~50) |
+|---|---|---|---|---|
+| 1 (10 runs) | before `crewtier do` | 104–111% of alone, in dollars | 112–124% | 164–194% |
+| 2 (5 runs) | 0.1.10, with `crewtier do` | **60–66%** | 100–103% (lead did it itself) | 114% (lead did it itself) |
 
-Measure it on your own work with `crewtier bench` (same task done twice, lead alone vs with crewtier: lead tokens, turns and dollars) and `crewtier session` (where the current conversation's cost went). Where it can still help regardless of cost: when your main agent's plan keeps hitting its limit while your other plans have quota to spare.
+What changed between the rounds: delegating became one call (`crewtier do`), the skill tells the lead to keep anything under ~300 lines to itself, and the skill text is a quarter of its old size. The large task flipped to cheaper even though a bug (since fixed) made the lead re-check the worker's result by hand. Still true: delegated tasks are slower (about 3 times here), and two runs per task is a small sample.
+
+Measure it on your own work with `crewtier bench` (lead tokens, turns and dollars for both sides, plus both diffs) and `crewtier session` (where the current conversation's cost went).
 
 ## Changing things later
 
