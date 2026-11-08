@@ -110,6 +110,20 @@ elif command -v gtimeout >/dev/null; then TO=(gtimeout --kill-after=10 "$tmo")
 else TO=(); fi
 
 # ---- where the worker runs --------------------------------------------------------------------
+# Two tasks writing the main tree at once can't be told apart (each would claim the other's files),
+# so if another task is already running there, this one goes to its own worktree.
+running="$root/$dir/running"; mkdir -p "$running"
+if [[ $isolated == 0 && $readonly_ == 0 ]]; then
+  for pf in "$running"/*.pid; do
+    [[ -f "$pf" ]] || continue
+    other="$(basename "$pf" .pid)"; [[ "$other" == "$task" ]] && continue
+    if kill -0 "$(cat "$pf" 2>/dev/null)" 2>/dev/null; then
+      echo "$other is already writing the main tree: running $task in its own worktree (apply it later with: crewtier apply $task)"
+      isolated=1; break
+    else rm -f "$pf"; fi
+  done
+  if [[ $isolated == 0 ]]; then echo $$ >"$running/$task.pid"; trap 'rm -f "$running/$task.pid"' EXIT; fi
+fi
 work="$root"
 if [[ $isolated == 1 ]]; then
   work="$root/$dir/wt/$task"

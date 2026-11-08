@@ -24,10 +24,16 @@ while [[ $# -gt 0 ]]; do
     --task-file) taskp="$(cat "${2:?}")"; shift 2 ;;
     --test) test_cmd="${2:?}"; shift 2 ;;
     --keep) keep=1; shift ;;
+    --clean)  # remove worktrees kept by earlier --keep runs
+      r="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not in a git repo"; exit 2; }
+      n=0; for d in "$r"/.crewtier/bench/*/self "$r"/.crewtier/bench/*/crewtier; do
+        [[ -d "$d" ]] || continue; git -C "$r" worktree remove --force "$d" 2>/dev/null && n=$((n + 1))
+      done
+      git -C "$r" worktree prune 2>/dev/null; echo "removed $n bench worktree(s)"; exit 0 ;;
     *) echo "unknown option $1"; exit 2 ;;
   esac
 done
-[[ -n "$lead" && -n "$taskp" ]] || { echo "usage: crewtier bench --lead claude|codex --task \"…\" [--test \"cmd\"] [--keep]"; exit 2; }
+[[ -n "$lead" && -n "$taskp" ]] || { echo "usage: crewtier bench --lead claude|codex --task \"…\" [--test \"cmd\"] [--keep]   ·   crewtier bench --clean"; exit 2; }
 case "$lead" in claude|codex) ;; *) echo "bench can measure claude or codex as the lead for now"; exit 2 ;; esac
 command -v "$lead" >/dev/null || { echo "$lead is not installed"; exit 2; }
 command -v jq >/dev/null || { echo "jq required"; exit 2; }
@@ -101,4 +107,5 @@ if [[ $keep == 0 ]]; then
   git worktree remove --force "$bdir/self" 2>/dev/null; git worktree remove --force "$bdir/crewtier" 2>/dev/null
 else
   echo "worktrees kept in ${bdir#$root/} — compare with: git -C ${bdir#$root/}/self diff, git -C ${bdir#$root/}/crewtier diff"
+  echo "remove them when done: crewtier bench --clean"
 fi

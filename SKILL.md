@@ -159,6 +159,10 @@ CREWTIER_LEAD=<lead> crewtier run-many T2:t1-easy T3:t1-easy T4:t2-normal
 
 Each runs in its own git worktree (dependency folders like `node_modules` are linked, not reinstalled), and leaves a patch instead of touching your tree. Review each summary, then `crewtier apply T2` (or `crewtier discard T2`). Apply one, commit, then the next. Stay sequential when tasks share files or build on each other: merging overlapping patches costs more than it saves.
 
+Only one task at a time writes the main tree. If you start a second `crewtier run` while one is still running there, crewtier moves the new one to its own worktree automatically (apply it later). While a task writes the main tree, don't edit files there yourself: crewtier counts every change in the tree as that task's work.
+
+`crewtier bench --keep` leaves its two worktrees for comparison; remove them afterwards with `crewtier bench --clean`.
+
 ## 5. Review
 
 The summary already has the diff stat and the verify result, so you usually don't need to run anything:
