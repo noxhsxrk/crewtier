@@ -215,10 +215,10 @@ write_result() {  # status [extra jq args...]
         --arg skipped "$skipped" --arg log "$log" --argjson exit "${code:-3}" --argjson seconds "${secs:-0}" \
         --argjson readonly "$readonly_" --argjson isolated "$isolated" --arg verify_cmd "$verify" --arg verify "${vres:-none}" \
         --arg files "${files:-}" --arg patch "${patch:-}" --arg session "${wsession:-}" --argjson usage "${wusage:-null}" \
-        --arg reported "${block:-}" '
+        --arg reported "${block:-}" --argjson lines "${lines:-0}" '
     {task:$task, tier:$tier, status:$status, worker:(if $worker=="" then null else $worker end), model:(if $model=="" then null else $model end),
      exitCode:$exit, seconds:$seconds, readOnly:($readonly==1), isolated:($isolated==1),
-     touchedFiles:($files|split("\n")|map(select(.!=""))),
+     touchedFiles:($files|split("\n")|map(select(.!=""))), linesChanged:$lines,
      verify:{command:(if $verify_cmd=="" then null else $verify_cmd end), result:$verify},
      skipped:($skipped|split(", ")|map(select(.!=""))),
      workerUsage:$usage, sessionFile:(if $session=="" then null else $session end),
@@ -271,6 +271,7 @@ fi
 
 block="$(printf '%s\n' "$out" | awk '/<<<CREWTIER/{p=1;next} /CREWTIER>>>/{p=0} p' | tail -6)"
 files="$(cd "$work" && git add -A -N . 2>/dev/null; git diff HEAD --name-only -- . ':(exclude).crewtier' ':(exclude)node_modules' ':(exclude).venv' ':(exclude)venv' ':(exclude)vendor')"
+lines="$(cd "$work" && git diff HEAD --numstat -- . ':(exclude).crewtier' ':(exclude)node_modules' ':(exclude).venv' ':(exclude)venv' ':(exclude)vendor' 2>/dev/null | awk '$1 ~ /^[0-9]+$/ {n += $1 + $2} END {print n + 0}')"
 patch=""; [[ $isolated == 1 ]] && patch="$dir/patches/$task.patch"
 
 status="done"; rstatus="done"

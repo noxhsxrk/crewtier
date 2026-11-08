@@ -179,8 +179,13 @@ Only if one of those looks wrong: `git diff -- <that file>`, then `tail -50` of 
 - Passed: close the meter **before committing** (it measures the diff against HEAD), then commit `T1: <title> [<worker>/<model>]`:
 
 ```bash
-CREWTIER_LEAD=<lead> crewtier meter end T1 t1-easy <worker>/<model> pass   # or: escalated
-CREWTIER_LEAD=<lead> crewtier meter end T3 lead self pass                  # a task you did yourself
+CREWTIER_LEAD=<lead> crewtier meter end T1        # delegated task: tier, worker and pass/fail come from .crewtier/results/T1.json
+CREWTIER_LEAD=<lead> crewtier meter end T3 lead self pass   # a task you did yourself: meter these too, or there is nothing to compare against
+```
+
+Keep one meter open at a time, wrapped tightly around one task: start it right before writing the brief (or before starting work on a task you keep), end it right after reviewing the result. Don't leave a meter open while you do other work, and don't open a second one: overlapping windows are flagged and left out of the report.
+
+```bash
 ```
 
 An escalated task keeps one meter running across all its retries, so its row shows the full cost of the detour.

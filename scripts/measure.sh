@@ -96,16 +96,32 @@ diff_lines() {  # lines added+removed vs HEAD (run before committing)
   git diff HEAD --numstat 2>/dev/null | awk '{a+=$1; d+=$2} END {print a+d+0}'
 }
 
-header='date\tlead\trepo\ttask\ttier\tworker\toutcome\tdiff_lines\tin\tout\tcache_write\tcache_read\n'
+header='date\tlead\trepo\ttask\ttier\tworker\toutcome\tdiff_lines\tin\tout\tcache_write\tcache_read\tflag\n'
 
 case "${1:-}" in
   start)
     t="${2:-session}"; mkdir -p "$meter"   # no id = one meter for the whole session
+    open_now="$(ls "$meter"/*.start 2>/dev/null | sed 's#.*/##; s#\.start$##' | grep -vxF "$t" | tr '\n' ' ')"
+    if [[ -n "$open_now" && "$t" != session ]]; then
+      echo "warning: meter already running for: $open_now— the windows overlap, so this task will be flagged and left out of report averages. End those first." >&2
+      echo "$open_now" >"$meter/$t.overlap"
+    else rm -f "$meter/$t.overlap"; fi
     totals >"$meter/$t.start"
     echo "meter started${2:+ for $t} (lead: $lead). Work as usual, then: crewtier meter end${2:+ $t}" ;;
 
   end)
-    t="${2:-session}"; tier="${3:--}"; who="${4:-session}"; outcome="${5:-pass}"
+    t="${2:-session}"; tier="${3:-}"; who="${4:-}"; outcome="${5:-}"
+    rj=".crewtier/results/$t.json"   # what `crewtier run` recorded wins over what was typed
+    if [[ -f "$rj" ]]; then
+      [[ -n "$tier" ]] || tier="$(jq -r '.tier // "-"' "$rj")"
+      [[ -n "$who" ]] || who="$(jq -r 'if .worker then "\(.worker)/\(.model // "default")" else "-" end' "$rj")"
+      [[ -n "$outcome" ]] || outcome="$(jq -r 'if .status == "done" and ((.verify.result // "none") | test("^(PASS|none)")) then "pass" else (.status // "fail") end' "$rj")"
+    fi
+    tier="${tier:--}"; who="${who:-session}"; outcome="${outcome:-pass}"
+    # another task's meter started while this one ran? then the numbers mix two jobs
+    others="$(ls "$meter"/*.start 2>/dev/null | sed 's#.*/##; s#\.start$##' | grep -vxF "$t" | grep -vxF session | tr '\n' ' ')"
+    flag=""; { [[ -f "$meter/$t.overlap" ]] || [[ -n "$others" && "$t" != session ]]; } && flag="overlap"
+    rm -f "$meter/$t.overlap"
     [[ -f "$meter/$t.start" ]] || { echo "no meter running${2:+ for $t}: start one with  crewtier meter start${2:+ $t}"; exit 2; }
     now="$(totals)"; before="$(cat "$meter/$t.start")"
     d=$(jq -nr --argjson a "$before" --argjson b "$now" \
@@ -113,9 +129,11 @@ case "${1:-}" in
     [[ -f "$results" ]] || printf "$header" >"$results"
     repo="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
     lines="$(diff_lines)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%F)" "$lead" "$repo" "$t" "$tier" "$who" "$outcome" "$lines" "$d" >>"$results"
+    [[ -f "$rj" ]] && lines="$(jq -r '.linesChanged // empty' "$rj" 2>/dev/null || echo "$lines")"; lines="${lines:-0}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%F)" "$lead" "$repo" "$t" "$tier" "$who" "$outcome" "$lines" "$d" "$flag" >>"$results"
+    rm -f "$meter/$t.start"
     read -r i o cw cr <<<"$d"
-    echo "$t: lead in=$i out=$o cache_write=$cw cache_read=$cr (diff $lines lines)" ;;
+    echo "$t: lead in=$i out=$o cache_write=$cw cache_read=$cr (diff $lines lines, $tier, $who, $outcome${flag:+, OVERLAP: left out of averages})" ;;
 
   session)   # the lead's whole current session, read from its own transcript: no meter needed
     f="$(transcript)"
@@ -125,18 +143,40 @@ case "${1:-}" in
       exit 0
     fi
     t="$(totals_of "$lead" "$f")"
-    repo="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-    delegated="$(awk -F'\t' -v d="$(date +%F)" -v r="$repo" -v L="$lead" 'NR>1 && $1==d && $3==r && $2==L && $6!="self"' "$results" 2>/dev/null | wc -l | tr -d ' ')"
-    jq -r --arg l "$lead" --arg n "$delegated" '
-      "\($l) session (whole conversation so far)",
-      "  tokens: in=\(.in) out=\(.out) cache_write=\(.cw) cache_read=\(.cr)",
-      "  cost units: \((.in + 5*.out + 1.25*.cw + 0.1*.cr) | floor)   (in x1, out x5, cache write x1.25, cache read x0.1)",
-      "  tasks delegated in this repo today: \($n)   (details: crewtier report)"' <<<"$t" ;;
+    # when the conversation started: first timestamp in the transcript
+    ts="$(jq -r 'select(.timestamp != null) | .timestamp' "$f" 2>/dev/null | head -1)"
+    since="$(jq -nr --arg t "$ts" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601' 2>/dev/null)"
+    total=0; wl=0; wn=0
+    if [[ -n "$since" ]] && git rev-parse --git-dir >/dev/null 2>&1; then
+      # lines changed since then: commits made in the session plus what's still uncommitted
+      total="$( { git log --since="@$since" --numstat --format= 2>/dev/null; git diff HEAD --numstat 2>/dev/null; } \
+               | awk '$1 ~ /^[0-9]+$/ && $3 !~ /^\.crewtier\// {n += $1 + $2} END {print n + 0}')"
+      # plus new files not added to git yet
+      untracked="$(git ls-files --others --exclude-standard 2>/dev/null | grep -v '^\.crewtier/' | while IFS= read -r u; do [[ -f "$u" ]] && wc -l <"$u"; done | awk '{n += $1} END {print n + 0}')"
+      total=$((total + untracked))
+      # lines the workers wrote: results crewtier run saved during this session
+      for r in .crewtier/results/*.json; do
+        [[ -f "$r" ]] || continue
+        mt="$(stat -c %Y "$r" 2>/dev/null || stat -f %m "$r" 2>/dev/null)"; [[ -n "$mt" && "$mt" -ge "$since" ]] || continue
+        read -r st ln <<<"$(jq -r '"\(.status) \(.linesChanged // 0)"' "$r")"
+        [[ "$st" == done ]] || continue
+        wl=$((wl + ln)); wn=$((wn + 1))
+      done
+    fi
+    jq -r --arg l "$lead" --argjson total "${total:-0}" --argjson wl "$wl" --argjson wn "$wn" '
+      (.in + 5*.out + 1.25*.cw + 0.1*.cr) as $u
+      | ([$total - $wl, 0] | max) as $ll
+      | "\($l) session (whole conversation so far)",
+        "  tokens: in=\(.in) out=\(.out) cache_write=\(.cw) cache_read=\(.cr)",
+        "  cost units: \($u | floor)   (in x1, out x5, cache write x1.25, cache read x0.1)",
+        "  lines changed this session: \($total)  (workers: \($wl) in \($wn) task(s) · lead: \($ll))",
+        (if $total > 0 then "  lead cost per line shipped: \(($u / $total) | floor) units   (compare with a session where you don\u0027t delegate)" else "  lead cost per line shipped: no code changes found yet" end)' <<<"$t" ;;
 
   report)
     [[ -f "$results" ]] || { echo "no results yet"; exit 0; }
     # cost units ~ price-weighted tokens: output x5, cache write x1.25, cache read x0.1, input x1
-    awk -F'\t' -v L="$lead" 'NR>1 && ($2==L || L=="unknown") {
+    awk -F'\t' -v L="$lead" 'NR>1 && ($2==L || L=="unknown") && $13=="overlap" {ov++; next}
+      NR>1 && ($2==L || L=="unknown") {
         k = $2 " " (($6=="self") ? "self" : "delegated:" $5)
         cu = $9 + 5*$10 + 1.25*$11 + 0.1*$12
         n[k]++; c[k]+=cu; l[k]+=$8; if ($7!="pass") f[k]++
@@ -144,6 +184,7 @@ case "${1:-}" in
       END {
         printf "%-28s %5s %12s %10s %14s %6s\n", "lead / group","tasks","cost_units","avg/task","units/diffline","!pass"
         for (k in n) printf "%-28s %5d %12.0f %10.0f %14.1f %6d\n", k, n[k], c[k], c[k]/n[k], (l[k]? c[k]/l[k] : 0), f[k]+0
+        if (ov) printf "(%d task(s) left out: their meter windows overlapped another task, so the numbers mix two jobs)\n", ov
       }' "$results"
     echo "(lower units/diffline = cheaper for the lead per line of code produced)"
     wu="$state/worker-usage.tsv"
