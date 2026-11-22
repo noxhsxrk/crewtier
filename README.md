@@ -215,6 +215,22 @@ You mostly use these. The lead calls the rest.
 
 Everything else, with options and environment variables: [reference](docs/reference.md#cli-reference).
 
+## Claude Code mod
+
+Claude Code users can also install crewtier's mod, which shows delegation inside the session:
+
+```
+/plugin install crewtier --marketplace noxhsxrk/crewtier
+```
+
+Answer `y` to add the marketplace, then pick a scope. From a shell: `claude plugin install crewtier --marketplace noxhsxrk/crewtier`. In the desktop app: click + next to the prompt box, then Plugins, Add marketplace with `noxhsxrk/crewtier`, then Add plugin.
+
+- **Band:** while the lead runs `crewtier do`, a line above the prompt shows the tier and elapsed time; a toast shows the PASS/FAIL line when it ends.
+- **Pane:** `/crew` opens a pane with workers' health and every task delegated this session.
+- **`/crew health | workers | routing | status | doctor`:** runs that command and shows its output in the chat.
+
+The mod calls the `crewtier` CLI, so install that first ([Quick start](#quick-start)).
+
 ## Docs
 
 - [A day with crewtier](docs/walkthrough.md): a session from request to commit

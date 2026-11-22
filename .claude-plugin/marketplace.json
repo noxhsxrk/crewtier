@@ -1,0 +1,5 @@
+{
+  "name": "crewtier",
+  "owner": { "name": "noxhsxrk" },
+  "plugins": [{ "name": "crewtier", "source": "./mod" }]
+}

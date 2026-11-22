@@ -1,0 +1,9 @@
+{
+  "name": "crewtier",
+  "version": "0.1.14",
+  "description": "crewtier inside Claude Code: a band while a worker runs, a pane of workers and delegated tasks, and /crew",
+  "author": { "name": "noxhsxrk" },
+  "license": "MIT",
+  "homepage": "https://github.com/noxhsxrk/crewtier",
+  "types": "./types/index.d.ts"
+}
