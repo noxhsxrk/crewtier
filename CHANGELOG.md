@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.13 (2026-11-23)
 
 ### Fixed
 - **One unusable model no longer takes down the whole worker.** Quota and "not on your plan" errors are now recorded per model (`<agent>/<model>` in `health.tsv`) and only that model is skipped for 60 minutes; the worker's other models are still tried. Before, a Cursor model answering "not included in your weekly usage. Buy credits" marked all of `cursor-agent` as quota-exhausted, so working models such as `composer-2.5` were skipped too. Sign-in and rate-limit errors still count for the whole worker.
