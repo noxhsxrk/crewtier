@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14 (2026-11-23)
+
+### Added
+- **Claude Code mod** (`mod/`), installed with `/plugin install crewtier --marketplace noxhsxrk/crewtier`:
+  - a band above the prompt while `crewtier do` runs (tier, elapsed time), then a toast with the PASS/FAIL line;
+  - a pane listing workers' health and every task delegated in the session (`/crew` opens it, Refresh re-runs `crewtier health`);
+  - `/crew health | workers | routing | status | doctor` runs that command and shows the output in the chat.
+
 ## 0.1.13 (2026-11-23)
 
 ### Fixed
