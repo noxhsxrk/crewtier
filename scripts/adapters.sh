@@ -49,7 +49,8 @@ list_models() {
     codex)    # live: `codex debug models` refreshes the catalog from your account, then prints it as JSON
               local j; j="$( (command -v timeout >/dev/null && timeout 30 codex debug models || codex debug models) 2>/dev/null)"
               if [[ -n "$j" ]] && command -v jq >/dev/null; then
-                jq -r '[.. | objects | select(((.slug // .id // .model) | type) == "string")
+                # .models[] when present: the recursive fallback also picks up per-model speed modes ("priority")
+                jq -r '[(.models // [.. | objects]) | .[] | objects | select(((.slug // .id // .model) | type) == "string")
                         | select(has("description") or has("visibility") or has("display_name"))]
                        | unique_by(.slug // .id // .model) | sort_by(.priority // 0) | .[]
                        | select((.visibility // "list") == "list")
@@ -59,9 +60,28 @@ list_models() {
               fi
               local d; d="$(sed -n 's/^ *model *= *"\([^"]*\)".*/\1/p' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null | head -1)"
               [[ -n "$d" ]] && echo "(default in config.toml: $d)" ;;
+    cursor-agent) cursor-agent models 2>/dev/null | strip_ansi | sed -n 's/^\([^ ]*\) - \(.*\)$/\1  \2/p' ;;
     claude)   printf '%s\n' "haiku  fast, cheap" "sonnet  mid" "opus  strongest" "(aliases; full names also work with --model)" ;;
     *)        local t; t="$(custom_template "$1")"; return 1 ;;
   esac
+}
+
+# Shorten a long model list for display (stdin: list_models output). A list of 30 lines or fewer is
+# printed whole; a longer one keeps $1 (default 4) models per provider ("openai/...") or name family
+# ("gpt-...", "grok-..."), then one "+N more" line each, so opencode's or cursor's hundreds of models
+# don't flood the lead's context. Full lists stay available from the CLI itself.
+brief_models() {
+  awk -v max="${1:-4}" '{ line[NR]=$0 }
+    END {
+      if (NR <= 30) { for (i=1;i<=NR;i++) print line[i]; exit }
+      for (i=1;i<=NR;i++) {
+        if (line[i] ~ /^\(/) { print line[i]; continue }
+        split(line[i], w, " "); p=w[1]
+        if (p ~ /\//) sub(/\/.*/, "/", p); else if (p ~ /-/) sub(/-.*/, "-", p); else p=p "-"
+        if (!(p in n)) order[++k]=p; if (++n[p] <= max) l[p]=l[p] line[i] "\n"
+      }
+      for (i=1;i<=k;i++) { p=order[i]; printf "%s", l[p]; if (n[p]>max) printf "(+%d more %s models)\n", n[p]-max, p }
+    }'
 }
 
 # Workers the user turned off (`crewtier disable <agent>`): one backend name per line.
@@ -164,13 +184,17 @@ run_one() {
   esac
 }
 
-# Classify a worker's output after a failed run: prints auth | ratelimit | quota | "" (unknown)
+# Classify a worker's output after a failed run: prints auth | model | ratelimit | quota | "" (unknown)
+#   model     = this model isn't on the user's plan or doesn't exist: skip only this model
 #   ratelimit = temporary (429, too many requests): short cooldown
-#   quota     = credit, billing, plan or usage limit used up: long cooldown
+#   quota     = credit, billing, plan or usage limit used up: long cooldown (recorded per model, since
+#               plans often meter models separately, e.g. Cursor: composer works when others need credits)
 classify_failure() {  # stdin: output
   local out; out="$(cat)"
   if grep -qiE 'not logged in|log ?in required|please (log|sign) ?in|authentication required|unauthori[sz]ed|invalid api key|no api key|expired token|token (has )?expired|re-?authenticate|\b401\b' <<<"$out"; then
     echo auth
+  elif grep -qiE 'not included in your|not (available|included) (on|in|with) your (plan|subscription|tier)|(model|engine)[^.]{0,60}(not found|not available|not supported|unavailable|does not exist|is not valid)|(unknown|invalid|unsupported|no such) model|model_not_found|(do(es)? not|don.t) have access to (the |this )?model' <<<"$out"; then
+    echo model
   elif grep -qiE 'quota|credit|insufficient|billing|subscription|payment required|\b402\b|usage limit|limit reached|plan limit|out of (requests|messages)' <<<"$out"; then
     echo quota
   elif grep -qiE 'rate.?limit|\b429\b|too many requests|overloaded|try again (later|in)|retry after|\b529\b' <<<"$out"; then

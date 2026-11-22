@@ -217,6 +217,42 @@ case "${1:-}" in
         END { printf "  %-26s %5s %12s\n", "tier worker/model", "runs", "avg units"; for (k in n) printf "  %-26s %5d %12.0f\n", k, n[k], c[k]/n[k] }' "$wu"
     fi ;;
 
+  routing-check)  # crewtier routing check [file]: JSON, backends, turned-off workers, model names, effort. No tokens spent.
+    r="${2:-$state/routing.$lead.json}"; [[ -f "$r" ]] || r="$state/routing.json"
+    [[ -f "$r" ]] || { echo "no routing file ($state/routing.$lead.json)"; exit 1; }
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapters.sh"
+    jq empty "$r" 2>/dev/null || { echo "✗ ${r/#$HOME/~} is not valid JSON:"; jq empty "$r" 2>&1 | head -3 | sed 's/^/    /'; exit 1; }
+    echo "checking ${r/#$HOME/~}"
+    jq -e '.tiers | type == "object"' "$r" >/dev/null 2>&1 || { echo "  ✗ no \"tiers\" object"; exit 1; }
+    bad=0; warn=0; lmdir="$(mktemp -d)"; trap 'rm -rf "$lmdir"' EXIT
+    for t in $(jq -r '.tiers | keys[]' "$r"); do
+      case "$t" in t1-easy|t2-normal|t3-hard) ;; *) echo "  ! $t: unknown tier (used: t1-easy t2-normal t3-hard)"; warn=$((warn+1));; esac
+    done
+    while IFS='|' read -r t b m e; do
+      [[ -z "$b" ]] && { echo "  ✗ $t: a candidate has no \"backend\""; bad=$((bad+1)); continue; }
+      c="$t $b/${m:-default}"
+      case " $(all_backends) " in *" $b "*) ;; *) echo "  ✗ $c: no adapter for $b (crewtier agents add $b)"; bad=$((bad+1)); continue;; esac
+      [[ "$b" == "$lead" ]] && { echo "  ! $c: $b is the lead, always skipped"; warn=$((warn+1)); }
+      command -v "$b" >/dev/null || { echo "  ! $c: $b is not installed"; warn=$((warn+1)); continue; }
+      is_disabled "$b" && { echo "  ! $c: $b is turned off (crewtier enable $b)"; warn=$((warn+1)); }
+      lmf="$lmdir/$b"; [[ -f "$lmf" ]] || list_models "$b" 2>/dev/null | grep -v '^(' >"$lmf"   # once per backend: codex fetches it live
+      lm="$(cat "$lmf")"
+      if [[ -n "$m" && -n "$lm" ]] && ! awk -v m="$m" '$1==m{f=1} END{exit !f}' <<<"$lm"; then
+        echo "  ✗ $c: $b doesn't list a model called $m (typo or retired? crewtier agents --models)"; bad=$((bad+1))
+      fi
+      case "$b" in
+        codex|muse)
+          if [[ -n "$e" ]]; then
+            levels="$(awk -v m="$m" '$1==m' <<<"$lm" | sed -n 's/.*\[effort: \([^]]*\)\].*/\1/p')"
+            [[ -z "$levels" ]] && levels="none,minimal,low,medium,high,xhigh"
+            [[ ",$levels," == *",$e,"* ]] || { echo "  ✗ $c: effort \"$e\" not one of: $levels"; bad=$((bad+1)); }
+          elif [[ "$t" == t3-hard ]]; then echo "  ! $c: no \"effort\", runs at the CLI default (t3 usually wants \"effort\": \"high\")"; warn=$((warn+1)); fi ;;
+        *) [[ -n "$e" ]] && { echo "  ! $c: $b ignores \"effort\" (agy puts the level in the model name, e.g. ...-high)"; warn=$((warn+1)); } ;;
+      esac
+    done <<<"$(jq -r '.tiers | to_entries[] | .key as $t | .value[]? | [$t, (.backend // ""), (.model // ""), (.effort // "")] | join("|")' "$r")"
+    echo "  $bad problem(s), $warn warning(s)$( [[ $bad == 0 ]] && echo ". Next: crewtier health --all-models (pings each worker/model pair)")"
+    [[ $bad == 0 ]]; exit ;;
+
   models)
     if [[ "${2:-}" == --check ]]; then
       r="$state/routing.$lead.json"; [[ -f "$r" ]] || r="$state/routing.json"
@@ -225,11 +261,23 @@ case "${1:-}" in
       source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapters.sh"
       for b in $(all_backends); do
         command -v "$b" >/dev/null || continue; is_disabled "$b" && continue; [[ "$b" == "$lead" ]] && continue
-        list_models "$b" 2>/dev/null | grep -v '^(' | while read -r m note; do
-          [[ -n "$m" ]] && ! grep -qxF "$b|$m" <<<"$inroute" && printf '  %-9s %-28s %s\n' "$b" "$m" "$note"
-        done
-      done | head -60
-      echo "  (gemini, copilot and user-added agents can't list models here: check their --help)"
+        unused="$(list_models "$b" 2>/dev/null | grep -v '^(' | while read -r m note; do
+          [[ -n "$m" ]] && ! grep -qxF "$b|$m" <<<"$inroute" && printf '%s  %s\n' "$m" "$note"
+        done)"
+        [[ -n "$unused" ]] || continue
+        if [[ $(wc -l <<<"$unused") -gt 30 ]]; then   # hundreds (opencode, cursor): counts per provider/family only
+          printf '  %-12s %s unused: %s  (names: crewtier agents --models --all)\n' "$b" "$(wc -l <<<"$unused" | tr -d ' ')" \
+            "$(brief_models 0 <<<"$unused" | sed -E 's/^\(\+([0-9]+) more (.*) models\)$/\2 \1/' | paste -sd, - | sed 's/,/, /g')"
+        else
+          while read -r m note; do printf '  %-12s %-28s %s\n' "$b" "$m" "$note"; done <<<"$unused"
+        fi
+      done
+      echo "  (gemini, copilot and agents without a model list can't be listed here: check their --help)"
+      # the other direction: names in the routing file the CLIs no longer list (typo, retired model)
+      if [[ -f "$r" ]]; then
+        echo; echo "models in your routing file the worker CLIs don't list (typo or retired):"
+        bash "$0" routing-check "$r" | grep "doesn't list" || echo "  none: every routed model is listed"
+      fi
       exit 0
     fi
     [[ -f "$results" || -f "$state/worker-usage.tsv" ]] || { echo "no results yet"; exit 0; }

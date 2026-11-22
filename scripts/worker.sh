@@ -15,7 +15,7 @@
 #                       attempt as a patch, reset, and retry one tier up (t1 → t2 → t3 → back to the lead)
 #
 # Routing: candidates in the tier are tried in order. Skipped: the lead, not installed, signed out,
-# out of quota, rate-limited, and API-billed candidates ("paid": true) unless CREWTIER_ALLOW_PAID=1
+# out of quota (per model: the backend's other models are still tried), model not on the plan, rate-limited, and API-billed candidates ("paid": true) unless CREWTIER_ALLOW_PAID=1
 # or "allow_paid": true in the routing file. Every skip is listed with its reason.
 # Fallback: if a worker stops on a sign-in / quota / rate-limit error after touching files, its
 # partial diff is saved to .crewtier/patches/<task>.<worker>.partial.patch and the tree is reset,
@@ -179,6 +179,12 @@ mark_health() {
   grep -v "^$1|" "$health" >"$health.tmp" 2>/dev/null; mv "$health.tmp" "$health"
   printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$(date +%s)" >>"$health"
 }
+# A model the plan doesn't include or that ran out of credit is cached as "<backend>/<model>" (by health.sh
+# or an earlier task) and skipped for an hour; the backend's other models are still tried.
+model_status() { awk -F'|' -v k="$1/$2" -v now="$(date +%s)" '$1==k && now-$4 < 3600 {s=$2} END{print s}' "$health" 2>/dev/null; }
+mark_failed() {  # backend model status detail: per model when there is one
+  if [[ -n "$2" ]]; then mark_health "$1/$2" "$3" "$4"; else mark_health "$1" "$3" "$4"; fi
+}
 
 # ---- run ----------------------------------------------------------------------------------------
 ran="" code=3 log="" t0=$(date +%s) skipped=""
@@ -212,6 +218,10 @@ while IFS= read -r c; do
       quota-exhausted) skip "$b (quota exhausted)"; continue ;;
       rate-limited)    skip "$b (rate-limited, cooling down)"; continue ;;
     esac
+    case "$(model_status "$b" "$m")" in
+      quota-exhausted)   skip "$b/$m (out of credit for this model)"; continue ;;
+      model-unavailable) skip "$b/$m (not on this plan, or no such model)"; continue ;;
+    esac
   fi
   log="$logs/$task-$b.log"; t_att=$(date +%s)
   printf '=== %s %s/%s tier=%s fix=%s isolated=%s readonly=%s timeout=%ss ===\n' "$(date +%T)" "$b" "$m" "$tier" "$resume" "$isolated" "$readonly_" "$tmo" >>"$log"
@@ -222,7 +232,8 @@ while IFS= read -r c; do
   if [[ $code -ne 0 && $code -ne 124 && $code -ne 137 ]]; then
     case "$(tail -n +"$((start+1))" "$log" | tail -n 40 | classify_failure)" in
       auth)      mark_health "$b" auth-required "$(login_hint "$b")"; skip "$b/$m (signed out mid-task)"; reset_attempt "$b"; continue ;;
-      quota)     mark_health "$b" quota-exhausted "hit during task $task"; skip "$b/$m (quota exhausted mid-task)"; reset_attempt "$b"; continue ;;
+      model)     mark_failed "$b" "$m" model-unavailable "hit during task $task"; skip "$b/$m (model not available on this plan)"; reset_attempt "$b"; continue ;;
+      quota)     mark_failed "$b" "$m" quota-exhausted "hit during task $task"; skip "$b/$m (quota exhausted mid-task)"; reset_attempt "$b"; continue ;;
       ratelimit) mark_health "$b" rate-limited "hit during task $task"; skip "$b/$m (rate-limited mid-task)"; reset_attempt "$b"; continue ;;
     esac
   fi

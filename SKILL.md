@@ -47,7 +47,7 @@ EOF
 
 Read only the section you need from `REFERENCE.md` in this skill's folder:
 
-- No `~/.crewtier/routing.<lead>.json` yet, or the user asks to set up or change workers and models → "Know the fleet".
+- No `~/.crewtier/routing.<lead>.json` yet, or the user asks to set up or change workers and models → "Know the fleet". (The user can also run `crewtier setup` themselves: an interactive menu for workers and routing.)
 - A worker is signed out or out of quota (`do` exits 3 or says so) → "Every session: who's signed in?". The user signs in with `crewtier login <agent>`.
 - Several big independent tasks at once → "Parallel".
 - The user asks what it saved → run `crewtier session` (whole conversation) or `crewtier report`; for an A/B test, "Is it actually saving tokens?".

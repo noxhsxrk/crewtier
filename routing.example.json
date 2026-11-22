@@ -1,6 +1,6 @@
 {
-  "_note": "Example for a Codex lead. The lead rebuilds this from the workers actually installed and saves it as ~/.crewtier/routing.<lead>.json. Candidates are tried top to bottom; the lead itself is always skipped.",
-  "lead": "codex",
+  "_note": "Example for a Claude Code lead. The lead rebuilds this from the workers actually installed and saves it as ~/.crewtier/routing.<lead>.json. Candidates are tried top to bottom; the lead itself is always skipped. \"effort\" is read by codex (and muse) only; agy and cursor put the level in the model name. Check it with: crewtier routing check, then crewtier health --all-models.",
+  "lead": "claude",
   "tiers": {
     "t1-easy": [
       {
@@ -8,8 +8,9 @@
         "model": "gemini-flash"
       },
       {
-        "backend": "claude",
-        "model": "haiku"
+        "backend": "codex",
+        "model": "gpt-luna",
+        "effort": "low"
       },
       {
         "backend": "opencode",
@@ -18,12 +19,13 @@
     ],
     "t2-normal": [
       {
-        "backend": "copilot",
-        "model": "claude-sonnet"
+        "backend": "codex",
+        "model": "gpt-sol",
+        "effort": "medium"
       },
       {
-        "backend": "claude",
-        "model": "sonnet"
+        "backend": "copilot",
+        "model": "claude-sonnet"
       },
       {
         "backend": "opencode",
@@ -32,12 +34,13 @@
     ],
     "t3-hard": [
       {
-        "backend": "claude",
-        "model": "opus"
+        "backend": "codex",
+        "model": "gpt-astra",
+        "effort": "high"
       },
       {
         "backend": "agy",
-        "model": "gemini-pro"
+        "model": "gemini-pro-high"
       },
       {
         "backend": "opencode",

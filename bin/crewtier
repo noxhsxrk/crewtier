@@ -75,7 +75,7 @@ ${c_bold}Install${c_off}
   crewtier update               update crewtier to the latest release
   crewtier refresh              rewrite skill links and the rules in agent rules files for this version
   crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
-  crewtier routing [add|remove|first|edit]   show or change which worker/model each tier uses
+  crewtier routing [add|remove|first|edit|check]   show, change or validate which worker/model each tier uses
   crewtier agents add <bin>    use another agent CLI as a worker
   crewtier workers             which workers are on or off, and their last health result
   crewtier disable <agent…>    never use these as workers (also asked about during init)
@@ -88,7 +88,7 @@ ${c_bold}Install${c_off}
 
 ${c_bold}Use${c_off} (normally called by the lead agent)
   crewtier agents [--models|--json]          coding-agent CLIs on this machine
-  crewtier health [--force|--cached] [agent…] which workers are signed in and still have credit
+  crewtier health [--force|--cached|--all-models] [agent…] which workers are signed in and still have credit
   crewtier run <task> <tier> [options]         send one task to a worker, verify it, print a short summary
       --fix ["msg"]  --isolated  --read-only  --verify "cmd"  --no-verify  --timeout SEC  --spec FILE|-
   crewtier run-many T1:t1-easy T2:t2-normal …  run tasks in parallel, each in its own worktree
@@ -284,6 +284,7 @@ cmd_agent_remove() {
 #   crewtier routing remove <tier> <agent> [model]
 #   crewtier routing first <tier> <agent> [model]              move to the top of the tier
 #   crewtier routing edit                                      open it in $EDITOR
+#   crewtier routing check                                     validate it (JSON, agents, model names, effort)
 routing_file() {  # picks the lead from --lead, CREWTIER_LEAD, Claude Code, or the only routing file there is
   local lead="${R_LEAD:-${CREWTIER_LEAD:-}}"
   [[ -z "$lead" && "${CLAUDECODE:-}" == 1 ]] && lead=claude
@@ -337,10 +338,11 @@ cmd_routing() {
         | .tiers[$t] = $hit + ($l - $hit)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
       ok "$t: $b${m:+/$m} goes first"; cmd_routing --lead "$(basename "$f" .json | sed 's/^routing\.//')" show ;;
     edit)
-      [[ -f "$f" ]] || { cp "$ROOT/routing.example.json" "$f"; }
+      if [[ -f "$f" ]]; then cp "$f" "$f.prev"; else cp "$ROOT/routing.example.json" "$f"; fi
       "${VISUAL:-${EDITOR:-vi}}" "$f"
-      jq empty "$f" 2>/dev/null && ok "saved ${f/#$H/~}" || warn "${f/#$H/~} is not valid JSON now; fix it before the next run" ;;
-    *) say "usage: crewtier routing [show|add|remove|first|edit] [--lead X]"; exit 2 ;;
+      bash "$S/measure.sh" routing-check "$f" || warn "fix it before the next run (previous version: ${f/#$H/~}.prev)" ;;
+    check) exec bash "$S/measure.sh" routing-check "$f" ;;
+    *) say "usage: crewtier routing [show|add|remove|first|edit|check] [--lead X]"; exit 2 ;;
   esac
 }
 

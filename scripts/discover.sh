@@ -2,7 +2,8 @@
 # List every coding-agent CLI installed on this machine.
 #
 #   discover.sh            table: agent, binary path, version, headless command, whether worker.sh has an adapter
-#   discover.sh --models   also list models for CLIs that can print them (slower)
+#   discover.sh --models   also list models for CLIs that can print them (slower; long lists are cut
+#                          to 4 per provider or model family, --all shows every one)
 #   discover.sh --json     machine-readable, for building routing.json
 #
 # To teach it a new agent, add one line to AGENTS below.
@@ -10,7 +11,8 @@ set -uo pipefail
 
 want_models=0; json=0
 lead="${CREWTIER_LEAD:-}"; [[ -z "$lead" && "${CLAUDECODE:-}" == "1" ]] && lead=claude
-for a in "$@"; do case "$a" in --models) want_models=1;; --json) json=1;; esac; done
+all_models=0
+for a in "$@"; do case "$a" in --models) want_models=1;; --json) json=1;; --all) all_models=1;; esac; done
 
 # name | binary | headless form | worker.sh backend ("-" = not wired yet)
 AGENTS='
@@ -22,7 +24,7 @@ Muse             | muse         | muse exec "<prompt>"                         |
 Gemini CLI       | gemini       | gemini -p "<prompt>"                         | gemini
 GitHub Copilot   | copilot      | copilot -p "<prompt>"                        | copilot
 Aider            | aider        | aider --yes-always --message "<prompt>"      | -
-Cursor CLI       | cursor-agent | cursor-agent -p "<prompt>"                   | -
+Cursor CLI       | cursor-agent | cursor-agent -p --trust --force --model {model} "<prompt>" | -
 Amp              | amp          | amp -x "<prompt>"                            | -
 Qwen Code        | qwen         | qwen -p "<prompt>"                           | -
 Crush            | crush        | crush run "<prompt>"                         | -
@@ -91,7 +93,9 @@ version_of() {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapters.sh"
 models_of() {
   local out; out="$(list_models "$1" 2>/dev/null)"
-  if [[ -n "$out" ]]; then sed 's/^/    /' <<<"$out"
+  if [[ -n "$out" && $all_models == 1 ]]; then sed 's/^/    /' <<<"$out"
+  elif [[ -n "$out" ]]; then brief_models 4 <<<"$out" | sed 's/^/    /'
+    [[ "$(brief_models 4 <<<"$out")" == *"more"*" models)"* ]] && echo "    (full list: crewtier agents --models --all, or the CLI's own model list)"
   else echo "    (no model list found: see \`$1 --help\` or its settings file)"; fi
 }
 

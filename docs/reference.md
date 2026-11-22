@@ -40,15 +40,15 @@ Saved per lead at `~/.crewtier/routing.<lead>.json`. The lead builds it with you
 
 ```json
 {
-  "lead": "codex",
+  "lead": "claude",
   "timeouts": { "t1-easy": 600, "t2-normal": 1200, "t3-hard": 2400 },
   "allow_paid": false,
   "tiers": {
     "t1-easy":   [ { "backend": "agy",     "model": "gemini-flash" },
-                   { "backend": "claude",  "model": "haiku" } ],
-    "t2-normal": [ { "backend": "copilot", "model": "claude-sonnet" },
-                   { "backend": "claude",  "model": "sonnet" } ],
-    "t3-hard":   [ { "backend": "claude",  "model": "opus" },
+                   { "backend": "codex",   "model": "gpt-luna", "effort": "low" } ],
+    "t2-normal": [ { "backend": "codex",   "model": "gpt-sol", "effort": "medium" },
+                   { "backend": "copilot", "model": "claude-sonnet" } ],
+    "t3-hard":   [ { "backend": "codex",   "model": "gpt-astra", "effort": "high" },
                    { "backend": "opencode","model": "anthropic/claude-opus", "paid": true } ]
   }
 }
@@ -56,7 +56,7 @@ Saved per lead at `~/.crewtier/routing.<lead>.json`. The lead builds it with you
 
 | field | meaning |
 |---|---|
-| `tiers.<tier>[]` | candidates in preference order: `backend` (worker CLI), `model`, optional `effort` (reasoning effort, Codex) |
+| `tiers.<tier>[]` | candidates in preference order: `backend` (worker CLI), `model`, optional `effort` (reasoning effort; read by codex and muse only, other CLIs put the level in the model name, e.g. agy `gemini-4-neon-xhigh`) |
 | `paid: true` | billed per API call; skipped unless `allow_paid` is true or `CREWTIER_ALLOW_PAID=1` |
 | `timeouts` | seconds before a worker is killed, per tier (defaults shown) |
 
@@ -140,11 +140,13 @@ agy        rate-limited     2m ago   429 Too Many Requests
 | `ready` | signed in, answered a one-word ping | 3 hours (`CREWTIER_HEALTH_TTL`) |
 | `auth-required` | signed out or token expired | 10 minutes |
 | `quota-exhausted` | credit, billing, plan or usage limit used up | 60 minutes |
+| `model-unavailable` | one model isn't on the plan or doesn't exist (only that model is skipped) | 60 minutes |
 | `rate-limited` | temporary (429, overloaded) | 5 minutes |
 | `error` | timeout, crash, anything else | 10 minutes |
 
 - **How:** a CLI's own status command where there is one (`codex login status`, `opencode auth list`), otherwise a one-word ping ("Reply with OK") in an empty temp folder. The ping costs a few of the **worker's** tokens, never the lead's. Workers are checked in parallel.
 - **When:** the lead checks at the start of every session, and `crewtier run` checks any worker whose result is stale right before using it. Mid-task sign-in or quota errors mark the worker on the spot.
+- **Per model:** a worker is pinged with its routed models in order until one answers. A model that is out of credit or not on the plan is listed under the worker and skipped on its own; the worker's other models still run. `crewtier health --all-models` pings every routed model; run it after changing the routing.
 - **Fixing it:** `crewtier login` (or `crewtier login codex`) runs that CLI's own sign-in and re-checks it. In Claude Code you can type `! crewtier login codex` without leaving the chat.
 
 ## Is it saving anything?
@@ -174,7 +176,7 @@ cost per task (worker cost units, runs whose usage could be read):
   claude/haiku @t1-easy                   13      9100           9858
 ```
 
-**Cost per passed task** is what a model really costs on a tier: a cheap model that fails half the time can end up dearer than a mid one. The lead uses this to promote or demote models, and asks before changing your routing. `crewtier models --check` lists models your workers offer that the routing file doesn't use yet.
+**Cost per passed task** is what a model really costs on a tier: a cheap model that fails half the time can end up dearer than a mid one. The lead uses this to promote or demote models, and asks before changing your routing. `crewtier models --check` lists models your workers offer that the routing file doesn't use yet, and routed models a worker no longer lists.
 
 ### Benchmark: the same task, with and without crewtier
 
@@ -271,11 +273,11 @@ Every file `init` creates or edits is recorded in `~/.crewtier/installed.tsv`, a
 | `crewtier prompt <lead>` | print the rules text, for agents configured by hand |
 | `crewtier status` · `uninstall` · `doctor` | install state · undo · full check-up |
 | `crewtier agents add <bin> [--headless 'cmd … {prompt}'] [--name N]` · `agents remove <bin>` | use any agent CLI as a worker without changing code; `{model}` in the template is optional |
-| `crewtier routing` · `routing add <tier> <agent> <model> [--effort E] [--first]` · `routing remove|first <tier> <agent> [model]` · `routing edit` | show or change the routing file yourself, no lead needed; warns when a model isn't in the agent's live list |
+| `crewtier routing` · `routing add <tier> <agent> <model> [--effort E] [--first]` · `routing remove|first <tier> <agent> [model]` · `routing edit` · `routing check` | show or change the routing file yourself, no lead needed; `check` validates JSON, agents, turned-off workers, model names and effort without spending tokens (`edit` runs it on save and keeps the old version as `.prev`) |
 | `crewtier workers` · `disable <agent…>` · `enable <agent…>` | list workers and turn some off or on; a turned-off worker is never checked or used |
 | `crewtier trust [dir]` | approve a repo's vendored copy |
 | `crewtier agents [--models\|--json]` | coding-agent CLIs on this machine |
-| `crewtier health [--force\|--cached\|--installed\|--verbose] [agent…]` | sign-in / quota status per worker; `--verbose` prints the full output of any failed check |
+| `crewtier health [--force\|--cached\|--installed\|--verbose\|--all-models] [agent…]` | sign-in / quota status per worker and per model; `--all-models` pings every routed model, `--verbose` prints the full output of any failed check |
 | `crewtier run <task> <tier> [options]` | run one task on a worker, verify, summarize |
 | &nbsp;&nbsp;`--fix ["msg"]` | resume the same worker with the failed verify output (or your message) |
 | &nbsp;&nbsp;`--verify "cmd"` · `--no-verify` | override or skip the check command |
