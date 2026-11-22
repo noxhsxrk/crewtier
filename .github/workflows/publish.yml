@@ -1,5 +1,6 @@
 # Publishes to npm when you push a tag like v0.4.0.
-# One-time setup: add an npm automation token as the repo secret NPM_TOKEN.
+# Uses npm trusted publishing (OIDC): no token. One-time setup, already done:
+#   npm trust github @noxhsxrk/crewtier --file publish.yml --repo noxhsxrk/crewtier --allow-publish
 name: publish
 on:
   push:
@@ -12,14 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22, registry-url: "https://registry.npmjs.org" }
+        with: { node-version: 24, registry-url: "https://registry.npmjs.org" }
+      # trusted publishing needs npm 11.5.1 or later
+      - run: npm install -g npm@11.21.3
       - name: Check tag matches package.json
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - name: Syntax check
         run: bash -n bin/crewtier scripts/*.sh install.sh
-      - run: pnpm publish --no-git-checks --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --provenance --access public
