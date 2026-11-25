@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.15 (2026-11-25)
+
+### Added
+- **Claude Code mod:** the band now stays above the prompt with an `off | on` delegation switch (kept across sessions), the running `crewtier do` tier and elapsed time, this session's delegated/pass/fail count, and **Board** (opens the pane) and **Health** buttons. Off adds a system-prompt rule telling the lead to do the work itself and blocks `crewtier do`. `/crew on | off` does the same from the prompt.
+
+### Fixed
+- **Claude Code mod:** the pane's Refresh button no longer times out (Claude Code gives a button press 10s; `crewtier health` now runs in the background).
+
 ## 0.1.14 (2026-11-23)
 
 ### Added
