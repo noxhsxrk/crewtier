@@ -432,7 +432,12 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {header}
         {card('workers', 'Workers', 'on/off · health', workerRows)}
-        {card('routing', 'Routing', 'tried top to bottom · ↑↓ reorder', routingRows)}
+        {card(
+          'routing',
+          'Routing',
+          'tried top to bottom · ↑↓ reorder',
+          routingRows.length ? routingRows : <Text dimColor>No routing found. Run `crewtier update` (needs 0.1.16+).</Text>,
+        )}
         {card('history', 'History', c.total ? `${c.total} tasks · ${rate}% pass` : 'no tasks yet', history)}
         {card('session', 'This session', `${list.length} delegated`, session)}
       </Box>

@@ -1,6 +1,6 @@
 {
   "name": "crewtier",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "crewtier inside Claude Code: a band with an on/off delegation switch and the running worker, a pane of workers and delegated tasks, and /crew",
   "author": { "name": "noxhsxrk" },
   "license": "MIT",

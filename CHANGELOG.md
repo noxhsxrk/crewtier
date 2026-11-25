@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.16 (2026-11-25)
+
+### Added
+- **Claude Code mod:** the `/crew` pane (or **Board** in the band) is now cards: **Workers** (turn each on or off, health dot, last check, error detail), **Routing** (each tier's models with health and track record, reorder with ↑ ↓), **History** (all-time pass rate and average time per worker) and this session's tasks.
+- **CLI:** `crewtier routing move <tier> <from> <to>` reorders a tier by position, and `crewtier routing json` prints the routing file. The pane needs both, so update the CLI with `crewtier update`.
+
 ## 0.1.15 (2026-11-25)
 
 ### Added
