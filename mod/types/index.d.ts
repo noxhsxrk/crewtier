@@ -7,8 +7,10 @@ export type Run = {
   line: string
 }
 
+export type Delegation = 'on' | 'off'
+
 declare module 'claude-code' {
   interface PluginState {
-    crewtier: { runs: Shaped<Run[]>; now: number; workers: string }
+    crewtier: { runs: Shaped<Run[]>; now: number; workers: string; delegation: Delegation }
   }
 }

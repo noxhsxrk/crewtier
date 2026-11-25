@@ -225,7 +225,8 @@ Claude Code users can also install crewtier's mod, which shows delegation inside
 
 Answer `y` to add the marketplace, then pick a scope. From a shell: `claude plugin install crewtier --marketplace noxhsxrk/crewtier`. In the desktop app: click + next to the prompt box, then Plugins, Add marketplace with `noxhsxrk/crewtier`, then Add plugin.
 
-- **Band:** while the lead runs `crewtier do`, a line above the prompt shows the tier and elapsed time; a toast shows the PASS/FAIL line when it ends.
+- **Band:** a row above the prompt with an `off | on` switch for delegation, the running `crewtier do` tier and its elapsed time, this session's delegated/pass/fail count, and **Board** (opens the pane) and **Health** buttons. A toast shows the PASS/FAIL line when a run ends. Off tells the lead to do the work itself and blocks `crewtier do`; the choice is kept across sessions. `[-]` collapses the band.
+- **`/crew on | off`:** the same switch from the prompt.
 - **Pane:** `/crew` opens a pane with workers' health and every task delegated this session.
 - **`/crew health | workers | routing | status | doctor`:** runs that command and shows its output in the chat.
 
