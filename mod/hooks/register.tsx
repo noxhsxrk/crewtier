@@ -1,12 +1,18 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Delegation, Run } from '../types'
+import type { Config, Delegation, Run } from '../types'
+import { ago, parseHealth, parseHistory, tone } from './board'
 
 const PANE = 'crewtier'
 const runs = atom({ plugin: 'crewtier', key: 'runs' } as const, [], { shape: 'runs-1' })
 const now = atom({ plugin: 'crewtier', key: 'now' } as const, 0)
 const workers = atom({ plugin: 'crewtier', key: 'workers' } as const, '')
+const EMPTY: Config = { workers: [], routing: {}, health: {}, stats: {}, recent: [], total: 0, passed: 0 }
+const config = atom({ plugin: 'crewtier', key: 'config' } as const, EMPTY, { shape: 'config-2' })
+// The mod runs inside Claude Code, so it edits the claude lead's routing.
+const LEAD = ['--lead', 'claude']
+
 // Delegation switch; mirrored in $.store so it outlasts the session.
 const delegation = atom({ plugin: 'crewtier', key: 'delegation' } as const, 'on' as Delegation)
 
@@ -43,16 +49,72 @@ async function crewtier($: EngineInterface, args: string[], timeoutMs = 60_000) 
   }
 }
 
+// `crewtier workers` rows: "  codex     on    ready" or "  codex     off   (crewtier enable codex)".
+export const parseWorkers = (text: string): Config['workers'] =>
+  [...text.matchAll(/^\s+(\S+)\s+(on|off)\b[ \t]*(.*)$/gm)].map(([, name = '', state, rest = '']) => ({
+    name,
+    on: state === 'on',
+    status: state === 'on' ? rest.trim() : '',
+  }))
+
+export const parseRouting = (json: string): Config['routing'] => {
+  try {
+    const tiers = (
+      JSON.parse(json) as { tiers?: Record<string, { backend: string; model?: string; effort?: string }[]> }
+    ).tiers
+    const out: Config['routing'] = {}
+    for (const [tier, list] of Object.entries(tiers ?? {})) {
+      out[tier] = list.map(c => ({
+        backend: c.backend,
+        id: `${c.backend}/${c.model ?? 'default'}`,
+        label: `${c.backend}/${c.model ?? 'default'}${c.effort ? `@${c.effort}` : ''}`,
+      }))
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+async function loadConfig($: EngineInterface) {
+  // shortcut: crewtier keeps its state in ~/.crewtier with no override; read it there.
+  const dir = `${await $.env.get('HOME')}/.crewtier`
+  const file = (name: string) => $.fs.read(`${dir}/${name}`).catch(() => '')
+  const [w, r, h, results, usage] = await Promise.all([
+    crewtier($, ['workers']),
+    crewtier($, ['routing', 'json', ...LEAD]),
+    file('health.tsv'),
+    file('results.tsv'),
+    file('worker-usage.tsv'),
+  ])
+  await update($, config, () => ({
+    workers: parseWorkers(w),
+    routing: parseRouting(r),
+    health: parseHealth(h),
+    ...parseHistory(results, usage),
+  }))
+}
+
+// A press gets 10s: start the command and return; the pane redraws when it lands.
+function change($: EngineInterface, args: string[]) {
+  void crewtier($, args, 30_000).then(async out => {
+    $.ui.toast(out.split('\n')[0] ?? '', { timeoutMs: 5000 })
+    await loadConfig($)
+  })
+}
+
 async function openPane($: EngineInterface) {
   const { isPlaced } = await $.ui.open({ id: PANE, title: 'crewtier' })
-  if (!(await read($, workers))) void crewtier($, ['health', '--cached']).then(t => update($, workers, () => t))
+  void loadConfig($)
   return isPlaced
 }
 
-// A press gets 10s: start the check and return; the pane redraws when it lands.
 async function checkHealth($: EngineInterface) {
   await update($, workers, () => 'checking…')
-  void crewtier($, ['health'], 180_000).then(text => update($, workers, () => text))
+  void crewtier($, ['health'], 180_000).then(async text => {
+    await update($, workers, () => text)
+    await loadConfig($)
+  })
 }
 
 async function setDelegation($: EngineInterface, value: Delegation) {
@@ -191,32 +253,188 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, runs)
-    const health = await read($, workers)
-
-    return (
-      <Box flexDirection="column">
-        <Box>
-          <Text bold>Workers </Text>
-          <Button
-            key="refresh"
-            label="Refresh"
-            onPress={() => checkHealth($)}
-          />
+    const checking = (await read($, workers)) === 'checking…'
+    const mode = await read($, delegation)
+    const c = await read($, config)
+    const t = await $.clock.now()
+    const off = new Set(c.workers.filter(a => !a.on).map(a => a.name))
+    const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
+    const healthOf = (id: string, agent: string) => c.health[id] ?? c.health[agent]
+    const ready = c.workers.filter(a => a.on && c.health[a.name]?.status === 'ready').length
+    const limited = c.workers.filter(a => a.on && tone(c.health[a.name]?.status) === 'warning').length
+    const broken = c.workers.filter(a => a.on && tone(c.health[a.name]?.status) === 'error').length
+    const record = (id: string) => {
+      const s = c.stats[id]
+      if (!s) return ''
+      const avg = s.timed ? ` · ⌀ ${elapsed((s.seconds / s.timed) * 1000)}` : ''
+      return `${s.pass}/${s.runs} pass${avg}`
+    }
+    const dot = (status: string | undefined, isOff: boolean) => (
+      <Text color={isOff ? 'inactive' : tone(status)}>{isOff ? '○' : '●'}</Text>
+    )
+    const card = (key: string, title: string, note: string, body: RenderChildren, actions?: RenderChildren) => (
+      <Box key={key} flexDirection="column" borderStyle="round" borderDimColor paddingX={1} width={width}>
+        <Box gap={1}>
+          <Text bold color="claude">
+            {title}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {note}
+          </Text>
+          <Box flexGrow={1} />
+          {actions}
         </Box>
-        {(health || 'not checked yet').split('\n').map(line => (
-          <Text dimColor={!health}>{line}</Text>
-        ))}
-        <Text> </Text>
-        <Text bold>Delegated this session</Text>
-        {list.length === 0 && <Text dimColor>Nothing delegated yet.</Text>}
-        {list
+        {body}
+      </Box>
+    )
+
+    const header = (
+      <Box key="header" gap={2} paddingX={1} width={width}>
+        <Text bold>crewtier</Text>
+        <Text>
+          delegation <Text color={mode === 'on' ? 'success' : 'inactive'}>● {mode}</Text>
+        </Text>
+        <Text color="success">{ready} ready</Text>
+        {limited > 0 && <Text color="warning">{limited} limited</Text>}
+        {broken > 0 && <Text color="error">{broken} failing</Text>}
+        {off.size > 0 && <Text dimColor>{off.size} off</Text>}
+        <Box flexGrow={1} />
+        <Button
+          key="health"
+          plain
+          label={checking ? 'Checking…' : 'Check health'}
+          onPress={() => (checking ? undefined : checkHealth($))}
+        />
+        <Button key="reload" plain label="Reload" onPress={() => void loadConfig($)} />
+      </Box>
+    )
+
+    const workerRows =
+      c.workers.length === 0 ? (
+        <Text dimColor>No workers found. Is the crewtier CLI installed?</Text>
+      ) : (
+        c.workers.map(a => {
+          const hl = c.health[a.name]
+          const isOff = !a.on
+          return (
+            <Box key={`w-${a.name}`} flexDirection="column">
+              <Box gap={1}>
+                <Button
+                  key={`toggle-${a.name}`}
+                  label={a.on ? ' on' : 'off'}
+                  {...(a.on ? { variant: 'primary' as const } : { plain: true as const, dimColor: true })}
+                  onPress={() => change($, [a.on ? 'disable' : 'enable', a.name])}
+                />
+                {dot(hl?.status, isOff)}
+                <Box width={14}>
+                  <Text bold={!isOff} dimColor={isOff}>
+                    {a.name}
+                  </Text>
+                </Box>
+                <Box width={17}>
+                  <Text color={isOff ? 'inactive' : tone(hl?.status)}>
+                    {isOff ? 'off' : (hl?.status ?? 'not checked')}
+                  </Text>
+                </Box>
+                <Text dimColor>{hl ? ago(t - hl.at) : ''}</Text>
+              </Box>
+              {!isOff && hl && hl.status !== 'ready' && hl.detail && (
+                <Box paddingLeft={8}>
+                  <Text dimColor wrap="truncate-end">
+                    └ {hl.detail}
+                  </Text>
+                </Box>
+              )}
+            </Box>
+          )
+        })
+      )
+
+    const routingRows = Object.entries(c.routing).map(([tier, models]) => (
+      <Box key={`t-${tier}`} flexDirection="column">
+        <Text color="suggestion">{tier}</Text>
+        {models.map((m, i) => {
+          const isOff = off.has(m.backend)
+          return (
+            <Box key={`r-${tier}-${i}`} gap={1}>
+              <Text dimColor>{`  ${i + 1}`}</Text>
+              <Button
+                key={`up-${tier}-${i + 1}`}
+                plain
+                label="↑"
+                dimColor={i === 0}
+                onPress={() => i > 0 && change($, ['routing', 'move', tier, String(i + 1), String(i), ...LEAD])}
+              />
+              <Button
+                key={`down-${tier}-${i + 1}`}
+                plain
+                label="↓"
+                dimColor={i === models.length - 1}
+                onPress={() =>
+                  i < models.length - 1 && change($, ['routing', 'move', tier, String(i + 1), String(i + 2), ...LEAD])
+                }
+              />
+              {dot(healthOf(m.id, m.backend)?.status, isOff)}
+              <Box width={36}>
+                <Text dimColor={isOff} strikethrough={isOff} wrap="truncate-end">
+                  {m.label}
+                </Text>
+              </Box>
+              <Text dimColor>{record(m.id)}</Text>
+            </Box>
+          )
+        })}
+      </Box>
+    ))
+
+    const history = c.recent.map((task, i) => (
+      <Box key={`h-${i}`} gap={1}>
+        <Text color={task.pass ? 'success' : 'error'}>{task.pass ? '✓' : '✗'}</Text>
+        <Box width={11}>
+          <Text dimColor>{task.date}</Text>
+        </Box>
+        <Box width={22}>
+          <Text wrap="truncate-end">
+            {task.repo} {task.task}
+          </Text>
+        </Box>
+        <Box width={10}>
+          <Text color="suggestion">{task.tier}</Text>
+        </Box>
+        <Text dimColor wrap="truncate-end">
+          {task.worker === '-' ? 'no worker ran' : `${task.worker} · ${task.lines} lines`}
+        </Text>
+      </Box>
+    ))
+
+    const session =
+      list.length === 0 ? (
+        <Text dimColor>Nothing delegated yet.</Text>
+      ) : (
+        list
           .slice()
           .reverse()
           .map(one => (
-            <Text color={one.outcome === 'pass' ? 'green' : one.outcome === 'fail' ? 'red' : 'yellow'}>
-              {one.outcome === 'running' ? '…' : one.outcome === 'pass' ? '✓' : '✗'} {one.tier} {one.line || 'running'}
-            </Text>
-          ))}
+            <Box key={`s-${one.id}`} gap={1}>
+              <Text color={one.outcome === 'pass' ? 'success' : one.outcome === 'fail' ? 'error' : 'warning'}>
+                {one.outcome === 'running' ? '…' : one.outcome === 'pass' ? '✓' : '✗'}
+              </Text>
+              <Text color="suggestion">{one.tier}</Text>
+              <Text dimColor wrap="truncate-end">
+                {one.outcome === 'running' ? `running · ${elapsed(t - one.startedAt)}` : one.line}
+              </Text>
+            </Box>
+          ))
+      )
+
+    const rate = c.total ? Math.round((c.passed / c.total) * 100) : 0
+    return (
+      <Box flexDirection="column">
+        {header}
+        {card('workers', 'Workers', 'on/off · health', workerRows)}
+        {card('routing', 'Routing', 'tried top to bottom · ↑↓ reorder', routingRows)}
+        {card('history', 'History', c.total ? `${c.total} tasks · ${rate}% pass` : 'no tasks yet', history)}
+        {card('session', 'This session', `${list.length} delegated`, session)}
       </Box>
     )
   })

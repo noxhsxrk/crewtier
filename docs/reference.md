@@ -273,7 +273,7 @@ Every file `init` creates or edits is recorded in `~/.crewtier/installed.tsv`, a
 | `crewtier prompt <lead>` | print the rules text, for agents configured by hand |
 | `crewtier status` · `uninstall` · `doctor` | install state · undo · full check-up |
 | `crewtier agents add <bin> [--headless 'cmd … {prompt}'] [--name N]` · `agents remove <bin>` | use any agent CLI as a worker without changing code; `{model}` in the template is optional |
-| `crewtier routing` · `routing add <tier> <agent> <model> [--effort E] [--first]` · `routing remove|first <tier> <agent> [model]` · `routing edit` · `routing check` | show or change the routing file yourself, no lead needed; `check` validates JSON, agents, turned-off workers, model names and effort without spending tokens (`edit` runs it on save and keeps the old version as `.prev`) |
+| `crewtier routing` · `routing add <tier> <agent> <model> [--effort E] [--first]` · `routing remove|first <tier> <agent> [model]` · `routing move <tier> <from> <to>` · `routing json` · `routing edit` · `routing check` | show or change the routing file yourself, no lead needed; `move` reorders a tier by position (1 = tried first), `json` prints the file; `check` validates JSON, agents, turned-off workers, model names and effort without spending tokens (`edit` runs it on save and keeps the old version as `.prev`) |
 | `crewtier workers` · `disable <agent…>` · `enable <agent…>` | list workers and turn some off or on; a turned-off worker is never checked or used |
 | `crewtier trust [dir]` | approve a repo's vendored copy |
 | `crewtier agents [--models\|--json]` | coding-agent CLIs on this machine |

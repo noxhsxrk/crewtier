@@ -75,7 +75,7 @@ ${c_bold}Install${c_off}
   crewtier update               update crewtier to the latest release
   crewtier refresh              rewrite skill links and the rules in agent rules files for this version
   crewtier setup                interactive menu: workers, add agents, routing, leads (also plain \`crewtier\`)
-  crewtier routing [add|remove|first|edit|check]   show, change or validate which worker/model each tier uses
+  crewtier routing [add|remove|first|move|edit|check]   show, change or validate which worker/model each tier uses
   crewtier agents add <bin>    use another agent CLI as a worker
   crewtier workers             which workers are on or off, and their last health result
   crewtier disable <agent…>    never use these as workers (also asked about during init)
@@ -283,6 +283,8 @@ cmd_agent_remove() {
 #   crewtier routing add <tier> <agent> <model> [--effort E] [--first] [--paid]
 #   crewtier routing remove <tier> <agent> [model]
 #   crewtier routing first <tier> <agent> [model]              move to the top of the tier
+#   crewtier routing move <tier> <from> <to>                   move the model at position <from> to <to> (1 = first)
+#   crewtier routing json                                      print the routing file (for the Claude Code mod)
 #   crewtier routing edit                                      open it in $EDITOR
 #   crewtier routing check                                     validate it (JSON, agents, model names, effort)
 routing_file() {  # picks the lead from --lead, CREWTIER_LEAD, Claude Code, or the only routing file there is
@@ -309,7 +311,7 @@ cmd_routing() {
       jq -r '.tiers | to_entries[] | "\(.key)|\([.value[] | "\(.backend)/\(.model // "default")\(if .effort then "@"+.effort else "" end)\(if .paid then " (paid)" else "" end)"] | join("  →  "))"' "$f" \
         | while IFS='|' read -r t list; do printf '  %-10s %s\n' "$t" "$list"; done
       local off; off="$(cat "$DISABLED" 2>/dev/null | tr '\n' ' ')"; [[ -n "$off" ]] && say "  ${c_dim}turned off (skipped even if listed): $off${c_off}"
-      say "  ${c_dim}lead: everything else. Change it: crewtier routing add|remove|first|edit${c_off}" ;;
+      say "  ${c_dim}lead: everything else. Change it: crewtier routing add|remove|first|move|edit${c_off}" ;;
     add)
       local t="${1:-}" b="${2:-}" m="${3:-}"; shift 3 2>/dev/null || true
       [[ -n "$t" && -n "$b" && -n "$m" ]] || { say "usage: crewtier routing add <tier> <agent> <model> [--effort E] [--first] [--paid]"; exit 2; }
@@ -337,12 +339,21 @@ cmd_routing() {
         | ($l | map(select(.backend == $b and ($m == "" or .model == $m)))) as $hit
         | .tiers[$t] = $hit + ($l - $hit)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
       ok "$t: $b${m:+/$m} goes first"; cmd_routing --lead "$(basename "$f" .json | sed 's/^routing\.//')" show ;;
+    move|mv)
+      local t="${1:-}" from="${2:-}" to="${3:-}"
+      [[ -n "$t" && "$from" =~ ^[1-9][0-9]*$ && "$to" =~ ^[1-9][0-9]*$ && -f "$f" ]] || { say "usage: crewtier routing move <tier> <from> <to>   (positions start at 1)"; exit 2; }
+      local n; n="$(jq --arg t "$t" '.tiers[$t] // [] | length' "$f")"
+      (( from <= n && to <= n )) || { say "$t has $n models: positions 1-$n"; exit 2; }
+      jq --arg t "$t" --argjson a "$from" --argjson b "$to" '.tiers[$t] as $l | ($l | del(.[$a - 1])) as $r
+        | .tiers[$t] = $r[:$b - 1] + [$l[$a - 1]] + $r[$b - 1:]' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+      ok "$t: position $from moved to $to"; cmd_routing --lead "$(basename "$f" .json | sed 's/^routing\.//')" show ;;
+    json) if [[ -f "$f" ]]; then cat "$f"; else echo '{}'; fi ;;
     edit)
       if [[ -f "$f" ]]; then cp "$f" "$f.prev"; else cp "$ROOT/routing.example.json" "$f"; fi
       "${VISUAL:-${EDITOR:-vi}}" "$f"
       bash "$S/measure.sh" routing-check "$f" || warn "fix it before the next run (previous version: ${f/#$H/~}.prev)" ;;
     check) exec bash "$S/measure.sh" routing-check "$f" ;;
-    *) say "usage: crewtier routing [show|add|remove|first|edit|check] [--lead X]"; exit 2 ;;
+    *) say "usage: crewtier routing [show|add|remove|first|move|json|edit|check] [--lead X]"; exit 2 ;;
   esac
 }
 

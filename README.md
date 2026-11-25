@@ -227,7 +227,7 @@ Answer `y` to add the marketplace, then pick a scope. From a shell: `claude plug
 
 - **Band:** a row above the prompt with an `off | on` switch for delegation, the running `crewtier do` tier and its elapsed time, this session's delegated/pass/fail count, and **Board** (opens the pane) and **Health** buttons. A toast shows the PASS/FAIL line when a run ends. Off tells the lead to do the work itself and blocks `crewtier do`; the choice is kept across sessions. `[-]` collapses the band.
 - **`/crew on | off`:** the same switch from the prompt.
-- **Pane:** `/crew` opens a pane with workers' health and every task delegated this session.
+- **Pane:** `/crew` (or **Board** in the band) opens a pane to turn each worker on or off, reorder each tier's models with ↑ ↓, check health, and see every task delegated this session.
 - **`/crew health | workers | routing | status | doctor`:** runs that command and shows its output in the chat.
 
 The mod calls the `crewtier` CLI, so install that first ([Quick start](#quick-start)).
